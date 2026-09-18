@@ -1,0 +1,156 @@
+/* =========================================================================
+   主题变量
+   -------------------------------------------------------------------------
+   视觉语言移植自 jerry-blog（深色毛玻璃），并补齐一套浅色变量。
+   由 <html> 上的两个属性驱动：
+     data-theme  = Light | Dark      （跟随系统时由 JS 写入实际值）
+     data-accent = teal | blue | ... （10 套主题色）
+   两者互相独立，可任意组合。
+   ========================================================================= */
+
+:root {
+  /* —— 尺寸 / 动效（与 jerry-blog 一致）—— */
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-sm: 6px;
+  --ease: 0.3s ease;
+  --ease-slow: 0.4s ease;
+  --back_filter: 19px;
+
+  /* —— 主题色（默认青碧）——
+     用 HSL 分量声明，暗色下只需抬高亮度，不用为每套色写两遍。 */
+  --accent-h: 174;
+  --accent-s: 60%;
+  --accent-l: 42%;
+  --accent-l-dark: 48%;
+
+  /* —— 浅色（默认）——
+     毛玻璃：半透明白 + 背景模糊，保证与深色同一套视觉语言。 */
+  --main_bg_color: #eef1f6;
+  --main_text_color: #1a1d21;
+  --muted_text_color: #5b6472;
+  --item_bg_color: rgba(255, 255, 255, 0.62);
+  --item_hover_color: rgba(255, 255, 255, 0.86);
+  --item_border_color: rgba(255, 255, 255, 0.7);
+  --input_bg_color: rgba(255, 255, 255, 0.72);
+  --text_bg_color: rgba(255, 255, 255, 0.5);
+  --back_filter_color: rgba(255, 255, 255, 0.28);
+  --border_color: rgba(15, 23, 42, 0.1);
+  --shadow_color: rgba(15, 23, 42, 0.09);
+  --shadow-hover: rgba(15, 23, 42, 0.14);
+  --scrollbar_color: rgba(15, 23, 42, 0.22);
+  --fill: #1a1d21;
+  --overlay_color: rgba(15, 23, 42, 0.34);
+
+  /* —— 语义色 —— */
+  --danger: #e5484d;
+  --success: #30a46c;
+  --warning: #f5a524;
+}
+
+[data-theme='Dark'] {
+  /* 与 jerry-blog 生效值完全一致 */
+  --main_bg_color: #12161c;
+  --main_text_color: #eee;
+  --muted_text_color: #a8b0bb;
+  --item_bg_color: #00000038;
+  --item_hover_color: #33333338;
+  --item_border_color: rgba(255, 255, 255, 0.08);
+  --input_bg_color: rgba(0, 0, 0, 0.28);
+  --text_bg_color: #00000040;
+  --back_filter_color: #00000030;
+  --border_color: rgba(255, 255, 255, 0.1);
+  --shadow_color: rgba(0, 0, 0, 0.3);
+  --shadow-hover: rgba(0, 0, 0, 0.45);
+  --scrollbar_color: rgba(255, 255, 255, 0.24);
+  --fill: #fff;
+  --overlay_color: rgba(0, 0, 0, 0.55);
+
+  --accent-l: var(--accent-l-dark);
+}
+
+/* —— 10 套主题色 —— */
+[data-accent='teal'] {
+  --accent-h: 174;
+  --accent-s: 60%;
+  --accent-l: 42%;
+  --accent-l-dark: 48%;
+}
+
+[data-accent='blue'] {
+  --accent-h: 221;
+  --accent-s: 83%;
+  --accent-l: 53%;
+  --accent-l-dark: 58%;
+}
+
+[data-accent='rose'] {
+  --accent-h: 346;
+  --accent-s: 77%;
+  --accent-l: 50%;
+  --accent-l-dark: 55%;
+}
+
+[data-accent='amber'] {
+  --accent-h: 38;
+  --accent-s: 92%;
+  --accent-l: 50%;
+  --accent-l-dark: 55%;
+}
+
+[data-accent='violet'] {
+  --accent-h: 262;
+  --accent-s: 83%;
+  --accent-l: 58%;
+  --accent-l-dark: 63%;
+}
+
+[data-accent='emerald'] {
+  --accent-h: 160;
+  --accent-s: 84%;
+  --accent-l: 39%;
+  --accent-l-dark: 44%;
+}
+
+[data-accent='slate'] {
+  --accent-h: 215;
+  --accent-s: 16%;
+  --accent-l: 47%;
+  --accent-l-dark: 55%;
+}
+
+[data-accent='coral'] {
+  --accent-h: 25;
+  --accent-s: 95%;
+  --accent-l: 53%;
+  --accent-l-dark: 58%;
+}
+
+[data-accent='pink'] {
+  --accent-h: 330;
+  --accent-s: 81%;
+  --accent-l: 60%;
+  --accent-l-dark: 65%;
+}
+
+[data-accent='cyan'] {
+  --accent-h: 189;
+  --accent-s: 94%;
+  --accent-l: 43%;
+  --accent-l-dark: 48%;
+}
+
+/* —— 派生色（用上面三件套算出来，改主题色自动跟着变）—— */
+:root {
+  --accent: hsl(var(--accent-h) var(--accent-s) var(--accent-l));
+  --accent-strong: hsl(var(--accent-h) var(--accent-s) calc(var(--accent-l) - 7%));
+  --accent-soft: hsl(var(--accent-h) var(--accent-s) var(--accent-l) / 0.14);
+  --accent-softer: hsl(var(--accent-h) var(--accent-s) var(--accent-l) / 0.08);
+  --accent-ring: hsl(var(--accent-h) var(--accent-s) var(--accent-l) / 0.4);
+  --accent-text: hsl(var(--accent-h) var(--accent-s) calc(var(--accent-l) - 12%));
+  --on-accent: #fff;
+}
+
+[data-theme='Dark'] {
+  --accent-text: hsl(var(--accent-h) calc(var(--accent-s) - 10%) calc(var(--accent-l) + 22%));
+}

@@ -1,0 +1,312 @@
+/* =========================================================================
+   全局基础样式：reset / 字体 / 滚动条 / 通用原子类
+   ========================================================================= */
+
+@font-face {
+  font-display: swap;
+  font-family: b;
+  src: url(/static/fonts/Ubuntu-Regular.ttf);
+}
+
+@font-face {
+  font-display: swap;
+  font-family: title;
+  src: url(/static/fonts/Pacifico-Regular.ttf);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  transition: background-color 0.2s ease;
+  user-select: none;
+}
+
+/* 输入类控件要能选中和粘贴 */
+input,
+textarea,
+[contenteditable='true'],
+.selectable {
+  user-select: text;
+}
+
+a:active,
+a:focus,
+a:hover,
+a:link,
+a:visited {
+  border: none;
+  color: inherit;
+  outline: none;
+  text-decoration: none;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+button,
+input,
+select,
+textarea {
+  border: none;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+button {
+  background: none;
+  cursor: pointer;
+}
+
+img {
+  display: block;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+/* 滚动条：细、半透明，悬停才明显（比 jerry-blog 的完全隐藏更适合工具站） */
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 8px;
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar_color);
+}
+
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  background: var(--main_bg_color);
+  background-attachment: fixed;
+  background-position: 50%;
+  background-repeat: no-repeat;
+  background-size: cover;
+  color: var(--main_text_color);
+  font-family: b, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  position: relative;
+  transition: color 0.1s ease;
+  width: 100%;
+}
+
+/* 深色主题用背景图（与 jerry-blog 一致） */
+[data-theme='Dark'] body {
+  background-image: url(/static/img/background.jpg);
+}
+
+#app {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* —— 通用：毛玻璃面板 —— */
+.glass {
+  backdrop-filter: blur(var(--back_filter));
+  -webkit-backdrop-filter: blur(var(--back_filter));
+  background-color: var(--item_bg_color);
+  border: 1px solid var(--item_border_color);
+}
+
+/* —— 通用：主按钮 —— */
+.btn-primary {
+  align-items: center;
+  background-color: var(--accent);
+  border-radius: var(--radius);
+  color: var(--on-accent);
+  display: inline-flex;
+  font-size: 14px;
+  gap: 6px;
+  justify-content: center;
+  padding: 9px 18px;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+.btn-primary:hover {
+  background-color: var(--accent-strong);
+}
+
+.btn-primary:active {
+  transform: scale(0.96);
+}
+
+.btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* —— 通用：次级按钮 —— */
+.btn-ghost {
+  align-items: center;
+  background-color: var(--item_bg_color);
+  border: 1px solid var(--border_color);
+  border-radius: var(--radius);
+  display: inline-flex;
+  font-size: 14px;
+  gap: 6px;
+  justify-content: center;
+  padding: 9px 18px;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+.btn-ghost:hover {
+  background-color: var(--item_hover_color);
+}
+
+.btn-ghost:active {
+  transform: scale(0.96);
+}
+
+/* —— 通用：图标按钮 —— */
+.icon-btn {
+  align-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--main_text_color);
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  width: 34px;
+}
+
+.icon-btn:hover {
+  background-color: var(--item_hover_color);
+  color: var(--accent-text);
+}
+
+.icon-btn:active {
+  transform: scale(0.9);
+}
+
+.icon-btn.active {
+  background-color: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* —— 通用：输入框 —— */
+.field {
+  background-color: var(--input_bg_color);
+  border: 1px solid var(--border_color);
+  border-radius: var(--radius);
+  color: var(--main_text_color);
+  font-size: 14px;
+  padding: 9px 12px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  width: 100%;
+}
+
+.field::placeholder {
+  color: var(--muted_text_color);
+}
+
+.field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* —— 通用：标签 —— */
+.tag {
+  background-color: var(--accent-soft);
+  border-radius: 999px;
+  color: var(--accent-text);
+  display: inline-block;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+/* —— 动画 —— */
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInUp {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 路由与列表的入场动画 */
+.fade-enter-active {
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+.fade-leave-active {
+  transition: opacity 0.16s ease;
+}
+
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.fade-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

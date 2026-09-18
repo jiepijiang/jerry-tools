@@ -1,0 +1,26 @@
+# 依赖与构建产物
+node_modules
+dist
+dist-ssr
+.vite
+
+# 本地环境
+*.local
+.env
+.env.*
+!.env.example
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# 日志
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 本机 AI 工作区（项目记忆等本地状态，不随仓库分发）
+.workbuddy-ai
