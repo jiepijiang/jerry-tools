@@ -79,6 +79,11 @@ const gridStyle = computed(() => ({
   '--cols': settings.perRow,
 }))
 
+/** 实际生效的排列密度（极简布局强制压到 compact），只用来加样式类。 */
+const gridDensityClass = computed(
+  () => `density-${settings.layout === 'minimal' ? 'compact' : settings.density}`,
+)
+
 const wrapperClass = computed(() => [
   `layout-${settings.layout}`,
   settings.displayScope === 'full' ? 'full-width' : 'std-width',
@@ -290,7 +295,7 @@ async function quickToggleEdit() {
 
         <div v-show="!(settings.layout === 'drawer' && isCatCollapsed(group.category.id))" class="group-body">
           <!-- 一级分类下的书签 -->
-          <div v-if="group.bookmarks.length" class="grid" :style="gridStyle">
+          <div v-if="group.bookmarks.length" class="grid" :class="gridDensityClass" :style="gridStyle">
             <BookmarkCard
               v-for="b in group.bookmarks"
               :key="b.id"
@@ -312,7 +317,7 @@ async function quickToggleEdit() {
               {{ sub.category.name }}
               <span class="gh-count">{{ sub.bookmarks.length }}</span>
             </h3>
-            <div class="grid" :style="gridStyle">
+            <div class="grid" :class="gridDensityClass" :style="gridStyle">
               <BookmarkCard
                 v-for="b in sub.bookmarks"
                 :key="b.id"
@@ -536,6 +541,11 @@ async function quickToggleEdit() {
   display: grid;
   gap: 11px;
   grid-template-columns: repeat(var(--cols, 5), minmax(0, 1fr));
+}
+
+/* 只显示图标时，每格一个图标太空，改成按最小宽度自动密排 */
+.grid.density-icon {
+  grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
 }
 
 .sub-group {

@@ -7,7 +7,7 @@ import { computed, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import Modal from '@/components/Modal.vue'
 import { accentColors, gradientPresets, iconSchemes } from '@/data/themeColors'
-import { cardStyles, displayScopes, layoutModes, perRowOptions, themeModes } from '@/data/options'
+import { cardStyles, densityModes, displayScopes, layoutModes, perRowOptions, themeModes } from '@/data/options'
 import { searchEngines } from '@/data/seed'
 import { resetSettings, setSetting, settings } from '@/composables/useSettings'
 import { useI18n } from '@/composables/useI18n'
@@ -199,6 +199,23 @@ async function copyShare() {
                 <AppIcon :name="c.icon" :size="18" />
                 <strong>{{ t(c.nameKey) }}</strong>
                 <span>{{ t(c.hintKey) }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="group">
+            <label class="group-label">{{ t('density.title') }}</label>
+            <div class="opt-row">
+              <button
+                v-for="d in densityModes"
+                :key="d.id"
+                class="opt-card"
+                :class="{ active: settings.density === d.id }"
+                @click="pick('density', d.id)"
+              >
+                <AppIcon :name="d.icon" :size="18" />
+                <strong>{{ t(d.nameKey) }}</strong>
+                <span>{{ t(d.hintKey) }}</span>
               </button>
             </div>
           </div>

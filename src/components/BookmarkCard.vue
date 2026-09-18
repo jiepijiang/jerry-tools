@@ -2,10 +2,15 @@
 /**
  * 书签卡片。
  *
- * 三种风格：
+ * 卡片风格（决定卡片长什么样）：
  *   default     —— 图标 + 名称 + 简介，横向排布（与参考站一致）
  *   neumorphic  —— 柔和浮雕阴影，浅色下质感更明显
- *   compact     —— 圆角方块，只留图标和名称，密集排布
+ *   mac         —— 圆角方块，图标居中竖排，密集排布
+ *
+ * 书签排列（决定卡片里放多少信息，与上面是两套独立设置）：
+ *   normal      —— 名称 + 简介
+ *   compact     —— 只显示名称
+ *   icon        —— 只显示图标
  *
  * 悬停/按下动效沿用 jerry-blog 的语言：hover 上浮 2px + 阴影，
  * 按下缩到 0.9。
@@ -18,7 +23,7 @@ import { faviconOf } from '@/utils/helpers'
 
 const props = defineProps({
   bookmark: { type: Object, required: true },
-  /** 紧凑模式由父级强制（极简布局 / compact 卡片风格） */
+  /** 由父级强制压到「紧凑」密度（极简布局用） */
   dense: { type: Boolean, default: false },
   /** 是否显示拖拽手柄 */
   draggable: { type: Boolean, default: false },
@@ -32,10 +37,11 @@ const pressed = ref(false)
 
 const iconSrc = computed(() => props.bookmark.icon || faviconOf(props.bookmark.url))
 
-const compact = computed(() => props.dense || settings.cardStyle === 'compact')
+/** 实际生效的排列密度。极简布局会强制压到 compact。 */
+const density = computed(() => (props.dense ? 'compact' : settings.density))
 
 const showTooltip = computed(
-  () => settings.showBookmarkTooltip && !compact.value && !!props.bookmark.description,
+  () => settings.showBookmarkTooltip && density.value === 'normal' && !!props.bookmark.description,
 )
 
 function open() {
@@ -54,7 +60,7 @@ function onRelease() {
 <template>
   <div
     class="bm-card"
-    :class="[settings.cardStyle, { compact, pressed }]"
+    :class="[settings.cardStyle, `density-${density}`, { pressed }]"
     role="link"
     tabindex="0"
     @mousedown="onMouseDown"
@@ -75,13 +81,13 @@ function onRelease() {
       :src="iconSrc"
       :name="bookmark.name"
       :hash-key="bookmark.url"
-      :size="compact ? 30 : 34"
+      :size="density === 'normal' ? 34 : 30"
       :lazy="false"
     />
 
-    <div class="bm-text">
+    <div v-if="density !== 'icon'" class="bm-text">
       <h3 class="bm-name">{{ bookmark.name }}</h3>
-      <p v-if="!compact && bookmark.description" class="bm-desc">{{ bookmark.description }}</p>
+      <p v-if="density === 'normal' && bookmark.description" class="bm-desc">{{ bookmark.description }}</p>
     </div>
 
     <div v-if="editable" class="bm-actions">
@@ -164,8 +170,8 @@ function onRelease() {
     -4px -4px 10px rgba(255, 255, 255, 0.06);
 }
 
-/* —— 圆角方块：紧凑，居中竖排 —— */
-.bm-card.compact {
+/* —— 圆角方块：图标居中竖排，密集排布 —— */
+.bm-card.mac {
   flex-direction: column;
   gap: 7px;
   justify-content: center;
@@ -173,15 +179,21 @@ function onRelease() {
   text-align: center;
 }
 
-.bm-card.compact .bm-text {
+.bm-card.mac .bm-text {
   width: 100%;
 }
 
-.bm-card.compact .bm-name {
+.bm-card.mac .bm-name {
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* —— 排列密度：图标 —— */
+.bm-card.density-icon {
+  justify-content: center;
+  padding: 12px;
 }
 
 .bm-text {
@@ -237,7 +249,7 @@ function onRelease() {
   opacity: 1;
 }
 
-.bm-card.compact .bm-actions {
+.bm-card.mac .bm-actions {
   position: absolute;
   right: 2px;
   top: 2px;

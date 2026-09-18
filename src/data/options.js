@@ -16,7 +16,18 @@ export const layoutModes = [
 export const cardStyles = [
   { id: 'default', nameKey: 'card.default', hintKey: 'card.defaultHint', icon: 'Square' },
   { id: 'neumorphic', nameKey: 'card.neumorphic', hintKey: 'card.neumorphicHint', icon: 'Layers' },
-  { id: 'compact', nameKey: 'card.compact', hintKey: 'card.compactHint', icon: 'Grid2x2' },
+  { id: 'mac', nameKey: 'card.mac', hintKey: 'card.macHint', icon: 'Grid2x2' },
+]
+
+/**
+ * 书签排列密度。
+ * 与卡片风格是**两套独立设置**（参考站里分别是「卡片风格」和「书签排列」）：
+ * 前者决定卡片长什么样，后者决定卡片里放多少信息。
+ */
+export const densityModes = [
+  { id: 'normal', nameKey: 'density.normal', hintKey: 'density.normalHint', icon: 'Rows3' },
+  { id: 'compact', nameKey: 'density.compact', hintKey: 'density.compactHint', icon: 'Rows2' },
+  { id: 'icon', nameKey: 'density.icon', hintKey: 'density.iconHint', icon: 'Square' },
 ]
 
 /** 主题模式。 */
@@ -46,7 +57,8 @@ export const defaultSettings = {
   themeMode: 'system', // Light | Dark | system
   accent: 'teal',
   layout: 'grid', // grid | drawer | minimal
-  cardStyle: 'default', // default | neumorphic | compact
+  cardStyle: 'default', // default | neumorphic | mac
+  density: 'normal', // normal | compact | icon
   perRow: 5,
   displayScope: 'default', // default | full
   showFavoritesUnderSearch: true,
