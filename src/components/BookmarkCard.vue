@@ -76,6 +76,7 @@ function onRelease() {
       :name="bookmark.name"
       :hash-key="bookmark.url"
       :size="compact ? 30 : 34"
+      :lazy="false"
     />
 
     <div class="bm-text">

@@ -42,6 +42,17 @@
   --fill: #1a1d21;
   --overlay_color: rgba(15, 23, 42, 0.34);
 
+  /* 背景图上方那层「薄纱」。jerry-blog 只有深色一套，用的是纯压暗；
+     浅色这里换成白色薄纱 + 去饱和，只留下背景图的柔和质感，
+     否则那张日落照片的暖色块会透出来发浑，白卡片压不住。 */
+  --bg_veil_color: rgba(247, 249, 252, 0.86);
+  --bg_veil_filter: blur(30px) saturate(0.35);
+
+  /* 站点图标那块小方底的底色。真实 logo 大多透明底，
+     需要中性浅色托住；深色下也保持浅底，否则白色 logo 会消失。 */
+  --icon_tile_bg: #ffffff;
+  --icon_tile_border: rgba(15, 23, 42, 0.08);
+
   /* —— 语义色 —— */
   --danger: #e5484d;
   --success: #30a46c;
@@ -65,6 +76,14 @@
   --scrollbar_color: rgba(255, 255, 255, 0.24);
   --fill: #fff;
   --overlay_color: rgba(0, 0, 0, 0.55);
+
+  /* 与 jerry-blog 的 .Miyako-filter 完全一致 */
+  --bg_veil_color: rgba(0, 0, 0, 0.19);
+  --bg_veil_filter: blur(19px);
+
+  /* 深色下略微压灰一点，纯白小方块在暗色里太扎眼 */
+  --icon_tile_bg: #eef1f5;
+  --icon_tile_border: rgba(255, 255, 255, 0.12);
 
   --accent-l: var(--accent-l-dark);
 }

@@ -65,12 +65,18 @@ export function normalizeUrl(url) {
   return /^https?:\/\//.test(s) ? s : `https://${s}`
 }
 
-/** 站点图标：优先用自定义图标，否则用 Google 的 favicon 服务，最后退回兜底字母。 */
+/**
+ * 站点图标地址。
+ * 优先级：数据里写死的自定义图标 → 站点自己的 /favicon.ico → 由调用方渲染首字母兜底。
+ *
+ * 特意**不用** Google 的 s2 favicon 服务：它在国内不可达，会让整页图标集体挂掉，
+ * 而且批量请求还会被限流。让每个站点自己提供图标，既没有第三方依赖也不会被限。
+ */
 export function faviconOf(url, custom) {
   if (custom) return custom
   try {
-    const host = new URL(normalizeUrl(url)).hostname
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=64`
+    const host = new URL(normalizeUrl(url)).origin
+    return `${host}/favicon.ico`
   } catch {
     return ''
   }
