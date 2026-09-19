@@ -2,7 +2,7 @@
 /**
  * 书签新增 / 编辑弹窗。
  * 图标支持三种来源：自动获取 favicon、手填图标 URL、上传本地图片（转 dataURL 存本地）。
- * 校验失败时输入框会抖动一下（沿用 jerry-blog 留言板的 shake 反馈）。
+ * 校验失败时输入框会抖动一下（沿用 jerry-site 留言板的 shake 反馈）。
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'

@@ -12,7 +12,7 @@
  *   compact     —— 只显示名称
  *   icon        —— 只显示图标
  *
- * 悬停/按下动效沿用 jerry-blog 的语言：hover 上浮 2px + 阴影，
+ * 悬停/按下动效沿用 jerry-site 的语言：hover 上浮 2px + 阴影，
  * 按下缩到 0.9。
  */
 import { computed, ref } from 'vue'

@@ -3,7 +3,7 @@
  * 图标组件
  *
  * 图标用 Lucide 风格的描边写法（24x24 / stroke=currentColor），
- * 比 jerry-blog 那套填充路径更适合工具类界面（线条更细、信息密度高）。
+ * 比 jerry-site 那套填充路径更适合工具类界面（线条更细、信息密度高）。
  * body 是静态字符串，不来自用户输入，用 v-html 注入是安全的。
  */
 import { computed } from 'vue'

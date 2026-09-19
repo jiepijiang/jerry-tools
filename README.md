@@ -1,7 +1,7 @@
 # Jerry 导航（jerry-tools）
 
 个人网址导航 / 书签管理工具。**功能**参考 [dh.huhage.fun](https://dh.huhage.fun/) 实现，
-**UI、动效、交互**沿用 [Jerry's Blog](https://jiepijiang.github.io/jerry-blog/) 的设计语言。
+**UI、动效、交互**沿用 [Jerry Site](https://jiepijiang.github.io/jerry-site/) 的设计语言。
 
 > **当前进度：第一版（纯前端）**
 >
@@ -24,7 +24,7 @@ npm run preview  # 预览构建产物
 ## 在线预览
 
 - 线上：`https://jiepijiang.github.io/jerry-tools/`
-- 博客入口：`https://jiepijiang.github.io/jerry-blog/`
+- 个人门户入口：`https://jiepijiang.github.io/jerry-site/`
 
 ### 部署说明
 
@@ -255,7 +255,8 @@ src/
 
 - **功能参考**：[dh.huhage.fun](https://dh.huhage.fun/)（呼哈导航）。本项目的功能范围、
   交互流程、设置项命名对齐该站。
-- **视觉参考**：[Jerry's Blog](https://jiepijiang.github.io/jerry-blog/)。
+- **视觉参考**：[Jerry Site](https://jiepijiang.github.io/jerry-site/)
+  （原名 jerry-blog，2026-09 改名）。
 
 发现页的 377 条站点数据来自参考站的公开收录内容，**已剔除无法访问的链接**
 （详见下方）。若这些数据涉及你的权益，请告知，我会立即移除。

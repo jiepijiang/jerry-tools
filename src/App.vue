@@ -67,8 +67,8 @@ async function onLogout() {
         {{ t('footer.reference') }} dh.huhage.fun
       </a>
       <span class="sep">·</span>
-      <a href="https://jiepijiang.github.io/jerry-blog/" target="_blank" rel="noopener noreferrer">
-        {{ t('footer.styleRef') }} Jerry's Blog
+      <a href="https://jiepijiang.github.io/jerry-site/" target="_blank" rel="noopener noreferrer">
+        {{ t('footer.styleRef') }} Jerry Site
       </a>
     </footer>
 

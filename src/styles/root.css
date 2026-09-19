@@ -1,7 +1,7 @@
 /* =========================================================================
    主题变量
    -------------------------------------------------------------------------
-   视觉语言移植自 jerry-blog（深色毛玻璃），并补齐一套浅色变量。
+   视觉语言移植自 jerry-site（深色毛玻璃），并补齐一套浅色变量。
    由 <html> 上的两个属性驱动：
      data-theme  = Light | Dark      （跟随系统时由 JS 写入实际值）
      data-accent = teal | blue | ... （10 套主题色）
@@ -9,7 +9,7 @@
    ========================================================================= */
 
 :root {
-  /* —— 尺寸 / 动效（与 jerry-blog 一致）—— */
+  /* —— 尺寸 / 动效（与 jerry-site 一致）—— */
   --radius: 8px;
   --radius-lg: 12px;
   --radius-sm: 6px;
@@ -42,7 +42,7 @@
   --fill: #1a1d21;
   --overlay_color: rgba(15, 23, 42, 0.34);
 
-  /* 背景图上方那层「薄纱」。jerry-blog 只有深色一套，用的是纯压暗；
+  /* 背景图上方那层「薄纱」。jerry-site 只有深色一套，用的是纯压暗；
      浅色这里换成白色薄纱 + 去饱和，只留下背景图的柔和质感，
      否则那张日落照片的暖色块会透出来发浑，白卡片压不住。 */
   --bg_veil_color: rgba(247, 249, 252, 0.86);
@@ -70,7 +70,7 @@
 }
 
 [data-theme='Dark'] {
-  /* 与 jerry-blog 生效值完全一致 */
+  /* 与 jerry-site 生效值完全一致 */
   --main_bg_color: #12161c;
   --main_text_color: #eee;
   --muted_text_color: #a8b0bb;
@@ -87,7 +87,7 @@
   --fill: #fff;
   --overlay_color: rgba(0, 0, 0, 0.55);
 
-  /* 与 jerry-blog 的 .Miyako-filter 完全一致 */
+  /* 与 jerry-site 的 .Miyako-filter 完全一致 */
   --bg_veil_color: rgba(0, 0, 0, 0.19);
   --bg_veil_filter: blur(19px);
 

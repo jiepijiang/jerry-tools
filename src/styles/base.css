@@ -66,7 +66,7 @@ ol {
   list-style: none;
 }
 
-/* 滚动条：细、半透明，悬停才明显（比 jerry-blog 的完全隐藏更适合工具站） */
+/* 滚动条：细、半透明，悬停才明显（比 jerry-site 的完全隐藏更适合工具站） */
 ::-webkit-scrollbar {
   height: 8px;
   width: 8px;
@@ -90,7 +90,7 @@ html {
 }
 
 body {
-  /* 两套主题共用同一张背景图，与 jerry-blog 一致 */
+  /* 两套主题共用同一张背景图，与 jerry-site 一致 */
   background: var(--main_bg_color) url(/static/img/background.jpg) 50% / cover no-repeat fixed;
   color: var(--main_text_color);
   font-family: b, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
@@ -104,7 +104,7 @@ body {
 }
 
 /* 背景图上方那层「薄纱」：压暗 / 提亮 + 重度模糊。
-   对齐 jerry-blog 的 .Miyako-filter（fixed + inset:0 + 19px 模糊 + 极低 z-index）。
+   对齐 jerry-site 的 .Miyako-filter（fixed + inset:0 + 19px 模糊 + 极低 z-index）。
    没有这层，背景图会又亮又锐，卡片和正文都压不住。 */
 body::before {
   backdrop-filter: var(--bg_veil_filter);
