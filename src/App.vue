@@ -8,9 +8,8 @@ import TopBar from '@/components/TopBar.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import SearchOverlay from '@/components/SearchOverlay.vue'
 import ToastHost from '@/components/ToastHost.vue'
-import { fetchWeather } from '@/composables/useClock'
+import { geo, initWeather, weather } from '@/composables/useClock'
 import { logout } from '@/composables/useAuth'
-import { settings } from '@/composables/useSettings'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
 
@@ -18,9 +17,29 @@ const { t } = useI18n()
 
 const settingsOpen = ref(false)
 const searchOpen = ref(false)
+/** 打开设置面板时要直接落到哪个分区（'' = 保持上次的）。 */
+const settingsSection = ref('')
 
-onMounted(() => {
-  fetchWeather(settings.weatherCity)
+/** 同一个会话里「定位没拿到」只提醒一次，别每次刷新都弹。 */
+const GEO_NOTICE_KEY = 'jt:geo-notice-shown'
+
+function openSettings(section = '') {
+  settingsSection.value = section
+  settingsOpen.value = true
+}
+
+// 首次进入会请求浏览器定位授权；用户拒绝或超时则回落到设置里的城市。
+// 回落到的默认城市不是用户所在地，所以这里必须说一声，不能默默显示。
+onMounted(async () => {
+  await initWeather()
+  if (weather.source !== 'default' || !geo.error) return
+  try {
+    if (sessionStorage.getItem(GEO_NOTICE_KEY)) return
+    sessionStorage.setItem(GEO_NOTICE_KEY, '1')
+  } catch {
+    /* 隐私模式下读不到 sessionStorage，那就每次都提醒 */
+  }
+  toast(t('weather.geoFallbackHint', { name: weather.city }), 'warning')
 })
 
 async function onLogout() {
@@ -31,7 +50,7 @@ async function onLogout() {
 
 <template>
   <div class="app-shell">
-    <TopBar @open-settings="settingsOpen = true" @open-search="searchOpen = true" @logout="onLogout" />
+    <TopBar @open-settings="openSettings" @open-search="searchOpen = true" @logout="onLogout" />
 
     <main class="app-main">
       <RouterView v-slot="{ Component }">
@@ -53,7 +72,7 @@ async function onLogout() {
       </a>
     </footer>
 
-    <SettingsPanel v-model="settingsOpen" />
+    <SettingsPanel v-model="settingsOpen" :initial-section="settingsSection" />
     <SearchOverlay v-model="searchOpen" />
     <ToastHost />
   </div>

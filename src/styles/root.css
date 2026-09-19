@@ -53,10 +53,20 @@
   --icon_tile_bg: #ffffff;
   --icon_tile_border: rgba(15, 23, 42, 0.08);
 
+  /* 悬停提示框的底色。**不能复用 --item_bg_color**：那个是 0.62 的半透明，
+     卡片浮层用着好看，但提示框是浮在分类标题上方的，
+     底下的「开发工具」会透出来和网址叠在一起，网址直接读不清。
+     这里单独给一组接近不透明的值。 */
+  --tip_bg_color: rgba(255, 255, 255, 0.97);
+  --tip_border_color: rgba(15, 23, 42, 0.08);
+
   /* —— 语义色 —— */
   --danger: #e5484d;
   --success: #30a46c;
   --warning: #f5a524;
+  /* --warning 是给图标 / 描边用的亮橙，压在浅色玻璃面板上做 11.5px 正文
+     对比度只有 1.9:1，读不清。正文另给一个加深版，深色主题下两者等价。 */
+  --warning_text: #b45309;
 }
 
 [data-theme='Dark'] {
@@ -84,6 +94,13 @@
   /* 深色下略微压灰一点，纯白小方块在暗色里太扎眼 */
   --icon_tile_bg: #eef1f5;
   --icon_tile_border: rgba(255, 255, 255, 0.12);
+
+  /* 提示框：深色下用近不透明的炭灰，别让底下的卡片标题透出来 */
+  --tip_bg_color: rgba(26, 30, 37, 0.97);
+  --tip_border_color: rgba(255, 255, 255, 0.12);
+
+  /* 深色底上亮橙本身就够清楚，和图标色保持一致 */
+  --warning_text: #f5a524;
 
   --accent-l: var(--accent-l-dark);
 }

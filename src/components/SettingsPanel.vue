@@ -10,6 +10,7 @@ import { accentColors, gradientPresets, iconSchemes } from '@/data/themeColors'
 import { cardStyles, densityModes, displayScopes, layoutModes, perRowOptions, themeModes } from '@/data/options'
 import { searchEngines } from '@/data/seed'
 import { resetSettings, setSetting, settings } from '@/composables/useSettings'
+import { geo, refreshWeather, setWeatherCity, useMyLocation, weather } from '@/composables/useClock'
 import { useI18n } from '@/composables/useI18n'
 import { state, updateShare } from '@/composables/useStore'
 import { exportSnapshot, storage } from '@/data/storage'
@@ -17,7 +18,11 @@ import { storageKeys } from '@/data/options'
 import { copyText, download, formatDate } from '@/utils/helpers'
 import { toast } from '@/composables/useToast'
 
-const props = defineProps({ modelValue: { type: Boolean, default: false } })
+const props = defineProps({
+  modelValue: { type: Boolean, default: false },
+  /** 打开时直接落到哪个分区（空 = 保持上次的分区）。顶栏天气卡片会传 'weather'。 */
+  initialSection: { type: String, default: '' },
+})
 const emit = defineEmits(['update:modelValue', 'import'])
 
 const { t } = useI18n()
@@ -26,6 +31,7 @@ const SECTIONS = [
   { id: 'appearance', labelKey: 'layout.title', icon: 'LayoutGrid' },
   { id: 'theme', labelKey: 'theme.title', icon: 'Palette' },
   { id: 'content', labelKey: 'scope.title', icon: 'SlidersHorizontal' },
+  { id: 'weather', labelKey: 'weather.title', icon: 'CloudSun' },
   { id: 'share', labelKey: 'share.title', icon: 'Link' },
   { id: 'data', labelKey: 'settings.data', icon: 'Database' },
 ]
@@ -33,12 +39,18 @@ const SECTIONS = [
 const section = ref('appearance')
 const confirmState = ref({ open: false, title: '', text: '', action: null })
 const shareSlug = ref(state.share.slug)
+const weatherCityInput = ref(settings.weatherCity)
 const fileInput = ref(null)
 
 watch(
   () => props.modelValue,
   (v) => {
-    if (v) shareSlug.value = state.share.slug
+    if (v) {
+      // 只有明确指定了分区才跳转，否则保留用户上次停留的分区
+      if (props.initialSection) section.value = props.initialSection
+      shareSlug.value = state.share.slug
+      weatherCityInput.value = settings.weatherCity
+    }
   },
 )
 
@@ -62,6 +74,53 @@ async function runConfirm() {
   const fn = confirmState.value.action
   confirmState.value.open = false
   if (fn) await fn()
+}
+
+/* ---------------------------------------------------------------- 天气 */
+
+/** 当前这份天气的来源文案：定位 / 手填 / 内置默认（未定位）。 */
+const weatherSourceLabel = computed(() => {
+  if (weather.source === 'location') return t('weather.fromLocation')
+  if (weather.source === 'manual') return t('weather.fromManual')
+  return t('weather.notLocated')
+})
+
+/** 请求定位并按结果取天气。失败时把 geo.error（i18n key）直接抛给提示条。 */
+async function doLocate() {
+  await setSetting('useGeolocation', true)
+  const ok = await useMyLocation()
+  if (ok) toast(t('weather.geoOk'))
+  else if (geo.error) toast(t(geo.error), 'warning')
+}
+
+/** 重新定位 = 清掉坐标与反查缓存后重取。 */
+async function doRefresh() {
+  const ok = await refreshWeather()
+  if (ok) toast(t('weather.geoOk'))
+  else if (geo.error) toast(t(geo.error), 'warning')
+  else toast(t('weather.fail'), 'error')
+}
+
+async function toggleGeolocation(on) {
+  if (on) {
+    // doLocate 里会把 useGeolocation 打开
+    await doLocate()
+    return
+  }
+  // 关掉自动定位 → 立刻落到手填城市（setWeatherCity 会把 useGeolocation 关掉）
+  await setWeatherCity(weatherCityInput.value.trim() || settings.weatherCity)
+  toast(t('weather.geoOff'))
+}
+
+async function doSaveCity() {
+  const name = weatherCityInput.value.trim()
+  if (!name) {
+    toast(t('weather.cityEmpty'), 'warning')
+    return
+  }
+  const ok = await setWeatherCity(name)
+  if (ok) toast(t('weather.citySaved', { name }))
+  else toast(t('weather.fail'), 'error')
 }
 
 /* ---------------------------------------------------------------- 数据 */
@@ -385,6 +444,71 @@ async function copyShare() {
           </div>
         </template>
 
+        <!-- ============ 天气与定位 ============ -->
+        <template v-else-if="section === 'weather'">
+          <div class="group">
+            <label class="group-label">{{ t('weather.title') }}</label>
+            <div class="seg">
+              <button
+                class="seg-item"
+                :class="{ active: settings.useGeolocation }"
+                @click="toggleGeolocation(true)"
+              >
+                <AppIcon name="MapPin" :size="15" />{{ t('weather.geoAuto') }}
+              </button>
+              <button
+                class="seg-item"
+                :class="{ active: !settings.useGeolocation }"
+                @click="toggleGeolocation(false)"
+              >
+                <AppIcon name="Pencil" :size="15" />{{ t('weather.geoManual') }}
+              </button>
+            </div>
+            <p class="hint-line">
+              {{ settings.useGeolocation ? t('weather.geoAutoHint') : t('weather.geoManualHint') }}
+            </p>
+          </div>
+
+          <div class="group">
+            <label class="group-label">{{ t('weather.locateGroup') }}</label>
+            <div class="inline">
+              <button class="btn-primary" :disabled="geo.locating" @click="doLocate">
+                <AppIcon :name="geo.locating ? 'Loader' : 'MapPin'" :size="15" />
+                {{ geo.locating ? t('weather.locating') : t('weather.locate') }}
+              </button>
+              <button class="btn-ghost" @click="doRefresh">
+                <AppIcon name="RefreshCw" :size="15" />{{ t('weather.refresh') }}
+              </button>
+            </div>
+            <p v-if="geo.error" class="warn">
+              <AppIcon name="AlertCircle" :size="13" />{{ t(geo.error) }}
+            </p>
+            <p v-else-if="!geo.supported" class="warn">
+              <AppIcon name="AlertCircle" :size="13" />{{ t('weather.geoUnsupported') }}
+            </p>
+            <p v-else-if="weather.city && weather.source === 'default'" class="warn">
+              <AppIcon name="MapPinOff" :size="13" />{{ t('weather.setCityHint') }}
+            </p>
+            <p v-else-if="weather.city" class="hint-line">
+              {{ t('weather.current', { name: weather.city }) }} · {{ weatherSourceLabel }}
+            </p>
+          </div>
+
+          <div class="group">
+            <label class="group-label">{{ t('weather.manualCity') }}</label>
+            <div class="inline">
+              <input
+                v-model="weatherCityInput"
+                class="field"
+                :placeholder="t('weather.cityPlaceholder')"
+                @keydown.enter="doSaveCity"
+              />
+              <button class="btn-primary" @click="doSaveCity">{{ t('weather.save') }}</button>
+            </div>
+            <p class="hint-line">{{ t('weather.manualCityHint') }}</p>
+          </div>
+        </template>
+
         <!-- ============ 分享 ============ -->
         <template v-else-if="section === 'share'">
           <div class="group">
@@ -596,10 +720,18 @@ async function copyShare() {
 
 .warn {
   align-items: center;
-  color: var(--warning);
+  color: var(--warning_text);
   display: flex;
   font-size: 11.5px;
   gap: 5px;
+  margin-top: 8px;
+}
+
+/* 分组下方的说明行（天气定位当前状态等） */
+.hint-line {
+  color: var(--muted_text_color);
+  font-size: 11.5px;
+  line-height: 1.5;
   margin-top: 8px;
 }
 
@@ -770,8 +902,22 @@ async function copyShare() {
 
 /* —— 其它 —— */
 .inline {
+  align-items: center;
   display: flex;
   gap: 8px;
+}
+
+/* 输入框占满剩余宽度，按钮保持自身宽度（否则「保存」会被挤成竖排两行） */
+.inline .field {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.inline .btn-primary,
+.inline .btn-ghost {
+  flex: none;
+  white-space: nowrap;
 }
 
 .btn-grid {

@@ -101,7 +101,7 @@ function onRelease() {
 
     <!-- 悬停提示框 -->
     <Transition name="tip">
-      <div v-if="showTooltip" class="bm-tooltip glass">
+      <div v-if="showTooltip" class="bm-tooltip">
         <div class="tip-head">
           <strong>{{ bookmark.name }}</strong>
         </div>
@@ -276,13 +276,19 @@ function onRelease() {
   color: var(--danger);
 }
 
-/* —— 悬停提示框 —— */
+/* —— 悬停提示框 ——
+   这里刻意不用 .glass：提示框浮在分类标题上方，半透明底会把底下的字透上来
+   和网址叠在一起。改用 --tip_bg_color（近不透明）+ 自身的模糊兜底。 */
 .bm-tooltip {
+  backdrop-filter: blur(var(--back_filter));
+  -webkit-backdrop-filter: blur(var(--back_filter));
+  background-color: var(--tip_bg_color);
+  border: 1px solid var(--tip_border_color);
   border-radius: var(--radius);
   bottom: calc(100% + 8px);
   box-shadow: 0 12px 30px var(--shadow-hover);
   left: 50%;
-  max-width: 260px;
+  max-width: 280px;
   opacity: 0;
   padding: 10px 12px;
   pointer-events: none;
@@ -299,6 +305,7 @@ function onRelease() {
 }
 
 .tip-head strong {
+  color: var(--main_text_color);
   font-size: 12.5px;
   font-weight: 600;
 }
@@ -313,8 +320,8 @@ function onRelease() {
 .tip-url {
   color: var(--accent-text);
   display: block;
-  font-size: 11px;
-  margin-top: 4px;
+  font-size: 11.5px;
+  margin-top: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

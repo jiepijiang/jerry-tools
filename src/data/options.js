@@ -70,6 +70,8 @@ export const defaultSettings = {
   iconGradient: 'vivid',
   weatherAnimation: true,
   weatherCity: '北京',
+  /** 是否允许用浏览器定位自动判断城市。关掉后只用手填的 weatherCity。 */
+  useGeolocation: true,
 }
 
 /** 主题色 / 布局等存 localStorage 的键名前缀，与参考站保持同样的可读性。 */

@@ -21,7 +21,7 @@ const emit = defineEmits(['openSettings', 'openSearch'])
 
 const router = useRouter()
 const { t } = useI18n()
-const { timeText, dateText, lunarText, todayBadge, weather } = useClock()
+const { timeText, dateText, lunarText, todayBadge, weather, geo } = useClock()
 
 const accentOpen = ref(false)
 const userOpen = ref(false)
@@ -46,6 +46,12 @@ const themeIcon = computed(() => {
   if (settings.themeMode === 'system') return 'MonitorSmartphone'
   return isDark.value ? 'Moon' : 'Sun'
 })
+
+/**
+ * 现在显示的天气是不是「谁都没给、落到内置默认城市」的那份。
+ * 是的话要在卡片上标出来 —— 否则用户会把默认城市的天气当成本地天气。
+ */
+const needsCity = computed(() => weather.source === 'default')
 
 async function pickAccent(id) {
   await setSetting('accent', id)
@@ -115,15 +121,25 @@ function go(name) {
     </div>
 
     <!-- 天气 -->
-    <button class="info-card weather hide-md" @click="emit('openSettings')">
+    <button
+      class="info-card weather hide-md"
+      :class="{ 'needs-city': needsCity }"
+      :title="needsCity ? t('weather.setCityHint') : t('weather.switchCity')"
+      @click="emit('openSettings', 'weather')"
+    >
       <WeatherIcon :group="weather.group" :size="30" />
       <div class="card-text">
         <strong>{{ weather.temp != null ? weather.temp + '°' : '--' }}</strong>
-        <span>{{ weather.text || t('weather.loading') }}</span>
+        <span>{{ weather.text || (geo.locating ? t('weather.locating') : t('weather.loading')) }}</span>
       </div>
       <div v-if="weather.temp != null" class="card-text sub">
         <strong>{{ weather.city }}</strong>
-        <span>{{ weather.low }}° ~ {{ weather.high }}°</span>
+        <span>
+          <em v-if="needsCity" class="geo-tag">
+            <AppIcon name="MapPinOff" :size="10" :stroke="2.4" />{{ t('weather.notLocated') }}
+          </em>
+          {{ weather.low }}° ~ {{ weather.high }}°
+        </span>
       </div>
     </button>
 
@@ -334,6 +350,32 @@ button.info-card:hover {
 .card-text.sub {
   border-left: 1px solid var(--border_color);
   padding-left: 10px;
+}
+
+/* —— 「未定位」标记 ——
+   定位没拿到时天气落到了内置默认城市，这里必须说清楚，
+   否则用户会把默认城市的天气当成本地天气。
+   选择器写成 .card-text .geo-tag 是为了盖过上面 .card-text span 的灰色。 */
+.info-card.weather.needs-city {
+  background-color: rgba(245, 165, 36, 0.1);
+}
+
+.card-text .geo-tag {
+  align-items: center;
+  background-color: rgba(245, 165, 36, 0.2);
+  border-radius: 999px;
+  color: var(--warning_text);
+  display: inline-flex;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 500;
+  gap: 2px;
+  margin-right: 4px;
+  padding: 1px 6px 1px 4px;
+}
+
+.card-text .geo-tag :deep(svg) {
+  color: inherit;
 }
 
 /* —— 搜索入口 —— */
