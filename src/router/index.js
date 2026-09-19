@@ -20,6 +20,13 @@ const routes = [
     meta: { title: '管理后台' },
   },
   {
+    /* 参考站把它做成独立路由而不是后台的一个 tab，保持一致 */
+    path: '/icon-management',
+    name: 'icon-management',
+    component: () => import('@/views/IconManagementView.vue'),
+    meta: { title: '图标管理' },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),

@@ -21,6 +21,7 @@ import {
   updateSite,
 } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
+import { useRouter } from 'vue-router'
 import { toast } from '@/composables/useToast'
 import { faviconOf, hostOf } from '@/utils/helpers'
 
@@ -38,6 +39,7 @@ const unlocked = ref(false)
 const password = ref('')
 const pwError = ref('')
 const tab = ref('stats')
+const router = useRouter()
 
 const siteQuery = ref('')
 const iconQuery = ref('')
@@ -367,6 +369,10 @@ async function sendReply() {
             <input v-model="iconQuery" :placeholder="t('admin.iconSearchPlaceholder')" />
           </div>
           <span class="count-hint">{{ iconSites.length }} / {{ stats.sites }}</span>
+          <!-- 参考站把图标管理也做成了独立路由 /icon-management，这里给个入口 -->
+          <button class="btn-ghost sm" @click="router.push('/icon-management')">
+            <AppIcon name="ArrowRight" :size="14" />{{ t('iconMgmt.title') }}
+          </button>
         </div>
         <div class="icon-grid">
           <div v-for="s in iconSites" :key="s.id" class="icon-card glass">
