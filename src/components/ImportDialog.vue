@@ -44,7 +44,18 @@ function pickFile() {
   fileInput.value?.click()
 }
 
-/** 递归解析 <DL> 结构。 */
+/**
+ * 递归解析 <DL> 结构。
+ *
+ * 顺带读 <DD> 当描述。Netscape 格式里 <DD> 是书签的备注位，
+ * Chrome / Firefox 导出时都会带上（浏览器里叫「备注」），
+ * 但原来的实现只读 <A> 的文字，于是导入进来的卡片第二行永远是空的。
+ *
+ * ⚠️ <DD> 是 <DT> 的**兄弟**，不是子元素。
+ * 按 HTML 规范，`<dd>` 起始标签会先把开着的 `<dd>`/`<dt>` 弹掉再插入自己，
+ * 所以解析出来是 `DT, DD, DT, DD…` 这样平铺的。
+ * 写成 `child.querySelector(':scope > DD')` 会一条都读不到（实测过）。
+ */
 function walkDl(dl, parentName, out) {
   for (const child of dl.children) {
     if (child.tagName !== 'DT') continue
@@ -55,11 +66,13 @@ function walkDl(dl, parentName, out) {
       const sub = child.querySelector(':scope > DL')
       const full = parentName ? `${parentName}/${folder}` : folder
       if (sub) walkDl(sub, full, out)
-      else out.push({ folder: full, title: folder, url: '' })
+      else out.push({ folder: full, title: folder, url: '', description: '' })
     } else if (a) {
       const url = a.getAttribute('HREF') || ''
       const title = a.textContent.trim() || url
-      if (url && /^https?:\/\//i.test(url)) out.push({ folder: parentName, title, url })
+      const sib = child.nextElementSibling
+      const description = sib && sib.tagName === 'DD' ? sib.textContent.trim() : ''
+      if (url && /^https?:\/\//i.test(url)) out.push({ folder: parentName, title, url, description })
     }
   }
 }
@@ -77,8 +90,22 @@ async function onFile(e) {
     const text = await readFileAsText(file)
     const doc = new DOMParser().parseFromString(text, 'text/html')
     const out = []
+    /**
+     * 只从**最外层**的 <DL> 开始走。
+     *
+     * 这里原本写的是 `dl.closest('DL') === null || dl.parentElement?.tagName === 'DT'`，
+     * 有 bug：`closest()` 是**包含自身**的，对 <DL> 调它永远返回自己、永不返回 null，
+     * 所以前半句恒为假。剩下的后半句只能命中「嵌在 <DT> 里的 <DL>」，
+     * 也就是各分类内部的那些 —— 根 <DL> 被整个跳过。
+     *
+     * 而嵌套调用传进去的 parentName 是 ''，于是每个书签的 folder 都算成空字符串，
+     * 导入后 100% 落进「未分类」，`ensureCategories` 一个分类也建不出来。
+     * 不只是自制文件，Chrome / Edge 自己导出的书签导进来也一样。
+     *
+     * 正确判据：父元素不在另一个 <DL> 里面，就说明这个 <DL> 是最外层的。
+     */
     doc.querySelectorAll('DL').forEach((dl) => {
-      if (dl.closest('DL') === null || dl.parentElement?.tagName === 'DT') {
+      if (dl.parentElement?.closest('DL') == null) {
         walkDl(dl, '', out)
       }
     })
@@ -158,7 +185,7 @@ async function doImport() {
       const ok = await createBookmark({
         name: item.title,
         url: item.url,
-        description: '',
+        description: item.description || '',
         categoryId: item.folder ? map[item.folder] || null : null,
       })
       if (ok) n++
