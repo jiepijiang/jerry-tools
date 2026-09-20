@@ -83,7 +83,7 @@ function onDrop(targetId) {
       <template v-for="cat in tree" :key="cat.id">
         <div
           class="cat-row"
-          :class="{ dragging: dragId === cat.id }"
+          :class="{ dragging: dragId === cat.id, editing: settings.editMode }"
           :draggable="settings.editMode"
           @dragstart="onDragStart(cat.id, $event)"
           @dragover.prevent
@@ -197,7 +197,13 @@ function onDrop(targetId) {
   color: var(--muted_text_color);
   display: flex;
   gap: 9px;
-  padding: 8px 9px;
+  /* 右侧 28px 是**给展开箭头预留的列**，不是普通内边距。
+     箭头 `.cat-toggle` 是 position:absolute; right:6px; width:18px，
+     占 [右-24, 右-6]；而计数 `.cat-count` 在 flex 流里靠右。
+     不留位的话两者会重叠 15px —— 实测「236」的末位数字被箭头压住，
+     看起来像「23✗」。所有行统一留位，计数才会对齐成一列。
+     详见 probe-sidebar-overlap.mjs。 */
+  padding: 8px 28px 8px 9px;
   transition: background-color 0.18s ease, color 0.18s ease;
   width: 100%;
 }
@@ -237,6 +243,8 @@ function onDrop(targetId) {
   opacity: 0.8;
 }
 
+/* 展开箭头。绝对定位盖在行的右端 —— 必须靠 `.cat-item` 的 padding-right:28px
+   给它留出位置，否则会压住右边的计数。 */
 .cat-toggle {
   align-items: center;
   color: var(--muted_text_color);
@@ -266,11 +274,16 @@ function onDrop(targetId) {
   transform: translateY(-50%);
 }
 
-.cat-row:hover .cat-ops {
+.cat-row.editing:hover .cat-ops {
   display: flex;
 }
 
-.cat-row:hover .cat-count {
+/* 编辑模式下悬停时，操作按钮（绝对定位 right:4px，宽约 66px）会盖住右端。
+   把计数和箭头一起藏掉，避免三样东西叠在一起。
+   ⚠️ 必须限定在 .editing 里：原来的写法是 `.cat-row:hover .cat-count`，
+   非编辑模式下悬停也会把计数藏掉（没有东西替代它），是个白藏的 bug。 */
+.cat-row.editing:hover .cat-count,
+.cat-row.editing:hover .cat-toggle {
   visibility: hidden;
 }
 
