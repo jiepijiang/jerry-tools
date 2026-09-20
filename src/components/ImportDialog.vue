@@ -8,7 +8,7 @@
 import { computed, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import Modal from '@/components/Modal.vue'
-import { createBookmark, createCategory, state } from '@/composables/useStore'
+import { createCategory, state, upsertBookmarks } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
 import { readFileAsText } from '@/utils/helpers'
@@ -180,17 +180,26 @@ async function doImport() {
   importing.value = true
   try {
     const map = await ensureCategories(items)
-    let n = 0
-    for (const item of items) {
-      const ok = await createBookmark({
+    /**
+     * ⚠️ 用 upsert 而不是逐条 createBookmark。
+     *
+     * 导入文件是会重新生成的（标题清洗规则一改就得重导一遍），
+     * 而用户库里已经躺着上一份 975 条。逐条 create 会让整体翻倍到 1950 条，
+     * 用户只能先清库 —— 那会连带丢掉他自己手加的书签和分类排序。
+     *
+     * upsert 按 URL 认人：同一条更新 name / description / categoryId，
+     * 新的才新建。顺带把「每条落一次盘」改成「整批落一次」。
+     */
+    const res = await upsertBookmarks(
+      items.map((item) => ({
         name: item.title,
         url: item.url,
         description: item.description || '',
         categoryId: item.folder ? map[item.folder] || null : null,
-      })
-      if (ok) n++
-    }
-    toast(t('import.done', { n }))
+      })),
+    )
+    if (!res) throw new Error('upsert failed')
+    toast(t('import.done', { n: res.created, u: res.updated }))
     emit('update:modelValue', false)
   } catch {
     toast(t('import.importFail'), 'error')

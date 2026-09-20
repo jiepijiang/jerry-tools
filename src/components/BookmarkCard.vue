@@ -185,9 +185,8 @@ function onRelease() {
 
 .bm-card.mac .bm-name {
   font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 和上面一样给两行，别退回单行 nowrap */
+  line-height: 1.3;
 }
 
 /* —— 排列密度：图标 —— */
@@ -200,13 +199,24 @@ function onRelease() {
   min-width: 0;
 }
 
+/* 名称允许**两行**。
+   一行只有 127px（卡片 209px - 图标 34 - 间距 12 - 内边距 28），
+   只放得下约 9 个汉字 / 17 个拉丁字符 —— 像
+   「echarts-legend中如何配置图标和文字的位置」这种标题会被截成
+   「echarts-legend…」，完全认不出是哪个站。两行把可用宽度翻倍到 ~254px。
+   用 -webkit-line-clamp 而不是自己截字符串：让浏览器按实际宽度断行，
+   中英文混排、不同字号都能自适应。
+   ⚠️ line-clamp 自带省略号，不能再配 `white-space:nowrap` + `text-overflow:ellipsis`
+   （那会强制单行，clamp 失效）。 */
 .bm-name {
   color: var(--main_text_color);
+  display: -webkit-box;
   font-size: 13.5px;
   font-weight: 500;
+  line-height: 1.35;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .bm-desc {

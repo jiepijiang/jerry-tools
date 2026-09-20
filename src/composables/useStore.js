@@ -351,6 +351,77 @@ export async function updateBookmark(id, patch) {
   return withRollback(() => {}, () => { state.bookmarks = prev }, storageKeys.bookmarks, state.bookmarks)
 }
 
+/** URL 的归一化比较键 —— 去尾斜杠 + 小写，与 isDuplicateUrl 同一口径。 */
+function bookmarkKey(url) {
+  return normalizeUrl(url).replace(/\/$/, '').toLowerCase()
+}
+
+/**
+ * 批量写入书签：**同 URL 的更新，没有的才新建**。返回 `{ created, updated }`。
+ *
+ * 为什么不是「逐条 create」：导入文件是可以重新生成的（标题清洗规则一改就得重导），
+ * 而用户库里已经有上一份了。逐条 create 会让 975 条整体翻倍，
+ * 用户只能先清库重导 —— 那会连带丢掉他自己手加的书签。
+ *
+ * 为什么按 URL 而不是 id 认人：文件里没有 id（Netscape 格式就没有这个字段）。
+ * 唯一稳定的身份就是 URL，而且同一个 URL 出现两次本来也该合并成一条。
+ *
+ * 覆盖哪几项：name / description / categoryId —— 这三项是「文件说了算」的。
+ * 其余（icon、sortOrder、createdAt、访问统计）保留用户侧现状，
+ * 重新导入不该把排序打乱、也不该把访问次数清零。
+ *
+ * ⚠️ 只 persist 一次。原实现是每条 create 都落一次盘（975 次
+ * `JSON.stringify` 全量书签），既慢又让 localStorage 反复抖动。
+ */
+export async function upsertBookmarks(items) {
+  const byUrl = new Map()
+  for (const b of state.bookmarks) byUrl.set(bookmarkKey(b.url), b)
+
+  const prev = clone(state.bookmarks)
+  const nextOrder = {}
+  let created = 0
+  let updated = 0
+
+  for (const data of items) {
+    const url = normalizeUrl(data.url)
+    const key = bookmarkKey(url)
+    const name = (data.name || '').trim()
+    const desc = (data.description || '').trim()
+    const cat = data.categoryId ?? null
+    const hit = byUrl.get(key)
+
+    if (hit) {
+      if (name) hit.name = name
+      // 空描述不覆盖 —— 普通 Chrome 导出的 <DD> 常是空的，
+      // 照抄会把用户自己写的备注擦掉。想清空请手动编辑。
+      if (desc) hit.description = desc
+      hit.categoryId = cat
+      updated++
+      continue
+    }
+
+    if (nextOrder[cat] == null) {
+      nextOrder[cat] = state.bookmarks.filter((b) => b.categoryId === cat).length
+    }
+    const item = {
+      id: uid('bm'),
+      categoryId: cat,
+      name: name || url,
+      url,
+      description: desc,
+      icon: data.icon || '',
+      sortOrder: nextOrder[cat]++,
+      createdAt: formatDate(),
+    }
+    state.bookmarks.push(item)
+    byUrl.set(key, item)
+    created++
+  }
+
+  const ok = await withRollback(() => {}, () => { state.bookmarks = prev }, storageKeys.bookmarks, state.bookmarks)
+  return ok ? { created, updated } : null
+}
+
 export async function deleteBookmark(id) {
   const prev = clone(state.bookmarks)
   state.bookmarks = state.bookmarks.filter((b) => b.id !== id)
