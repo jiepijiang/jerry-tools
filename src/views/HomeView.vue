@@ -75,6 +75,16 @@ const groups = computed(() => {
 
 const isEmpty = computed(() => !groups.value.length)
 
+/**
+ * 子分类个数。
+ *
+ * 原来这里算的是 `state.categories.length - groups.length`，是错的：
+ * `groups` 会随筛选变（选中某个分类时它只剩 1 个），也会把空分类滤掉，
+ * 于是这个数字完全不能反映「有几个子分类」—— 选中分类时它直接变成
+ * 「全部分类数 - 1」。直接数有 parentId 的分类才对。
+ */
+const subCategoryCount = computed(() => state.categories.filter((c) => c.parentId).length)
+
 const gridStyle = computed(() => ({
   '--cols': settings.perRow,
 }))
@@ -240,7 +250,7 @@ async function quickToggleEdit() {
           </span>
           <span class="count-hint">
             {{ t('common.sites', { n: state.bookmarks.length }) }}
-            · {{ t('common.subCategories', { n: Math.max(0, state.categories.length - groups.length) }) }}
+            · {{ t('common.subCategories', { n: subCategoryCount }) }}
           </span>
         </div>
 

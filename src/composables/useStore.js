@@ -188,21 +188,13 @@ export const categoryMap = computed(() => {
   return m
 })
 
-/** 分类 id → 该书签数量（含子分类）。 */
+/** 分类 id → 该书签数量（**含子分类**，与内容区展示的条数口径一致）。 */
 export const categoryCounts = computed(() => {
   const direct = {}
   for (const b of state.bookmarks) {
     direct[b.categoryId] = (direct[b.categoryId] || 0) + 1
   }
-  const total = {}
-  const walk = (nodes) => {
-    for (const n of nodes) {
-      const childSum = n.children?.length ? walk(n.children) : 0
-      total[n.id] = (direct[n.id] || 0) + childSum
-    }
-    return total[nodes[0]?.id] != null ? 0 : 0
-  }
-  // 自底向上累加
+  // 自底向上累加：先算子分类，再加到父分类头上
   const acc = {}
   const sum = (id) => {
     if (acc[id] != null) return acc[id]
@@ -213,7 +205,6 @@ export const categoryCounts = computed(() => {
     return n
   }
   for (const c of state.categories) sum(c.id)
-  void walk
   return acc
 })
 
@@ -230,7 +221,20 @@ export const groupedBookmarks = computed(() => {
     const children = state.categories
       .filter((c) => c.parentId === catId)
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-    const sub = children.map((c) => ({ category: c, bookmarks: collect(c.id) }))
+    /**
+     * ⚠️ 这里必须是 `collect(c.id).self`，不能写成 `collect(c.id)`。
+     *
+     * `collect()` 返回的是 `{ self, sub }` 对象而不是数组。写成对象的话，
+     * 下面 `sub.filter((s) => s.bookmarks.length)` 里的 `.length` 是 `undefined`，
+     * **所有子分类会被静默滤掉**，一个都不剩。
+     *
+     * 表现就是「侧栏显示 33，点进去只有 1 个链接」：
+     * 侧栏的 `categoryCounts` 是**含子分类**的递归求和（33），
+     * 而内容区只渲染 `group.bookmarks`（父分类直属的那 1 条），
+     * 子分类的书签一条都不出现。选中子分类更糟 —— `parent.subs.find()` 找不到，
+     * 直接返回 `[]`，页面全空。
+     */
+    const sub = children.map((c) => ({ category: c, bookmarks: collect(c.id).self }))
     return { self, sub }
   }
 
