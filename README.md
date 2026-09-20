@@ -131,6 +131,17 @@ Pages 的 source 必须是 **GitHub Actions**。
 
 > 密码明文这件事是刻意的：这一版只用来跑通完整交互，**不要用真实密码注册**。
 
+> **有一条书签依赖浏览器能力**：「开发工具 → 串口助手」指向
+> [AetherPort](https://serial.xywml.com/)（原站站长本人的作品），
+> 它基于 **Web Serial API**，**只有 Chromium 系（Chrome / Edge）能打开串口**，
+> Safari 和 Firefox 不支持；并且必须走 HTTPS 或 localhost。
+>
+> 这条提示**刻意没有写进卡片描述**：`.bm-desc` 是固定宽度 + `white-space:nowrap`
+> + `text-overflow:ellipsis`，**可用宽度只有 127px**，而现有文案
+> 「在线串口调试与固件升级」已经占 126.5px —— 加任何后缀
+> （「· 需 Chrome」163px、「（仅 Chrome/Edge）」221px）都会被**静默截断成「…」**。
+> 哪天把 `.bm-desc` 改成允许两行，再考虑挪进卡片。
+
 ---
 
 ## 技术栈与目录
@@ -360,3 +371,5 @@ const SEED_ADDITIONS = {
       覆盖率约 57%。想要更高覆盖率需要自建一个抓取 `<link rel="icon">` 的代理服务
       （浏览器端受 CORS 限制做不了）
 - [ ] 发现页接入真实浏览量与收藏数
+- [ ] `.bm-desc` 改成允许两行（或把描述上限写进编辑器的字数校验）。
+      现在只剩 0.5px 余量，任何补充说明都塞不进去，见上方「数据层与已知限制」末尾
