@@ -453,10 +453,10 @@ export async function moveBookmark(id, targetCategoryId, index = null) {
   return withRollback(() => {}, () => { state.bookmarks = prev }, storageKeys.bookmarks, state.bookmarks)
 }
 
-/** 检查 URL 是否重复。 */
+/** 检查 URL 是否重复。归一化口径见 bookmarkKey。 */
 export function isDuplicateUrl(url, excludeId = null) {
-  const u = normalizeUrl(url).replace(/\/$/, '').toLowerCase()
-  return state.bookmarks.some((b) => b.id !== excludeId && b.url.replace(/\/$/, '').toLowerCase() === u)
+  const u = bookmarkKey(url)
+  return state.bookmarks.some((b) => b.id !== excludeId && bookmarkKey(b.url) === u)
 }
 
 /** 记录一次访问。 */
