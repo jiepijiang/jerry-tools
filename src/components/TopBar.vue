@@ -31,6 +31,15 @@ const navItems = computed(() => {
   const items = [
     { name: 'home', label: t('nav.home'), icon: 'Home' },
     { name: 'discover', label: t('nav.discover'), icon: 'Compass' },
+    // 外链（不是路由）：知识库子站。放在「管理」之前 —— 管理是登录后才出现的
+    // 条件项，不该把常驻入口挤到它后面。
+    // 有 href 的项会渲染成 <a> 并新窗口打开，见下面的 :is。
+    {
+      name: 'knowledgeBase',
+      label: t('nav.knowledgeBase'),
+      icon: 'BookOpen',
+      href: 'https://jiepijiang.github.io/jerry-notes/',
+    },
   ]
   if (state.session?.isAdmin) items.push({ name: 'admin', label: t('nav.admin'), icon: 'Shield' })
   return items
@@ -83,16 +92,25 @@ function go(name) {
 
     <!-- 导航 -->
     <nav class="nav" :class="{ open: mobileMenu }">
-      <button
+      <!--
+        有 href 的项渲染成 <a>（外链，新窗口打开），其余是内部路由的 <button>。
+        用 :is 分流，避免为「一个外链」把整个循环拆成两份。
+      -->
+      <component
+        :is="item.href ? 'a' : 'button'"
         v-for="item in navItems"
         :key="item.name"
         class="nav-item"
         :class="{ active: activeName === item.name }"
-        @click="go(item.name)"
+        :href="item.href || undefined"
+        :target="item.href ? '_blank' : undefined"
+        :rel="item.href ? 'noopener noreferrer' : undefined"
+        :title="item.href ? item.label + '（新窗口打开）' : undefined"
+        @click="item.href ? (mobileMenu = false) : go(item.name)"
       >
         <AppIcon :name="item.icon" :size="15" />
         <span>{{ item.label }}</span>
-      </button>
+      </component>
     </nav>
 
     <div class="spacer" />
@@ -291,6 +309,8 @@ function go(name) {
   font-size: 13.5px;
   gap: 6px;
   padding: 7px 12px;
+  /* 外链项是 <a>，浏览器默认带下划线 —— 去掉，让它和按钮项长得一样 */
+  text-decoration: none;
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 

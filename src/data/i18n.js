@@ -13,7 +13,10 @@ export const messages = {
     'nav.home': '首页',
     'nav.discover': '发现',
     'nav.admin': '管理',
-    'nav.backToBlog': '返回博客',
+    // 外链，指向知识库子站。原先是 'nav.backToBlog': '返回博客' —— 那个 key
+    // 定义了但从没被任何组件引用过，是站点改名时留下的死键。
+    // 博客部分已重做成知识库看板（独立仓库 jerry-notes），这里跟着改叫知识库。
+    'nav.knowledgeBase': '知识库',
 
     'clock.lunar': '农历',
     'clock.today': '今日',
@@ -355,7 +358,7 @@ export const messages = {
     'nav.home': 'Home',
     'nav.discover': 'Discover',
     'nav.admin': 'Admin',
-    'nav.backToBlog': 'Blog',
+    'nav.knowledgeBase': 'Knowledge Base',
 
     'clock.lunar': 'Lunar',
     'clock.today': 'Today',
