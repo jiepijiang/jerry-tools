@@ -90,4 +90,10 @@ export const storageKeys = {
   session: `${STORAGE_PREFIX}:session`,
   share: `${STORAGE_PREFIX}:share`,
   visits: `${STORAGE_PREFIX}:visits`,
+  /**
+   * 种子数据的同步进度（记到第几个 SEED_VERSION 了）。
+   * 不是业务数据，是给「老用户补新种子条目」用的，见 useStore.js 的 syncSeedAdditions。
+   * 清业务数据时**不要**清它，否则下次打开会把已补过的条目再补一遍。
+   */
+  seedVersion: `${STORAGE_PREFIX}:seedVersion`,
 }

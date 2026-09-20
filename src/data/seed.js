@@ -7,9 +7,15 @@
      - Claude   （App unavailable in region）
    其余 19 条全部实测可访问（Cloudflare 反爬拦截不算失效）。
 
+   2026-09-20 追加 1 条（b22 串口助手），共 **22 条** —— 见文件末尾的说明。
+
    icon 字段：能拿到高清图标的直接写死（与参考站把图标存进数据的做法一致），
    拿不到的留空，由 faviconOf() 退回站点自己的 /favicon.ico。
    这样运行时不需要依赖任何第三方图标服务，国内也能正常显示。
+
+   ⚠️ **往这个文件里增删条目时，必须同步 +1 `SEED_VERSION` 并登记到
+   useStore.js 的 `SEED_ADDITIONS`** —— 否则老用户（localStorage 里已经有数据）
+   永远看不到新条目。原因见 useStore.js 顶部那段注释。
    ========================================================================= */
 
 export const seedCategories = [
@@ -27,6 +33,23 @@ export const seedBookmarks = [
   { id: 'b3', categoryId: 'dev', name: 'Stack Overflow', url: 'https://stackoverflow.com', description: '开发者问答社区', icon: 'https://cdn.sstatic.net/Sites/stackoverflow/Img/apple-touch-icon.png', sortOrder: 2 },
   { id: 'b4', categoryId: 'dev', name: 'MDN Web Docs', url: 'https://developer.mozilla.org', description: 'Web 技术权威文档', icon: 'https://developer.mozilla.org/apple-touch-icon.png', sortOrder: 3 },
   { id: 'b5', categoryId: 'dev', name: 'npm', url: 'https://www.npmjs.com', description: 'Node.js 包管理器', sortOrder: 4 },
+
+  /**
+   * 2026-09-20 追加。Jerry 是「前端 + 嵌入式前端」，串口调试是日常活，
+   * 但这类工具几乎全是 Windows 桌面软件，浏览器能直接用的很少。
+   *
+   * 挑它的原因：
+   *   - 纯 Web Serial，不用装驱动、不用装客户端，Chrome / Edge 打开就能连
+   *   - 功能比一般的在线版全：协议解析、YMODEM 固件升级、数据可视化
+   *   - 作者就是本站 UI 的复刻对象 xywml.com —— 同一个站长自己的产品
+   *     （主站 project 区那四张卡里本来就有「串口助手」，只是当时没找到
+   *      稳定可用的在线实现才拿掉的，见 jerry-site 的 site.js）
+   *
+   * ⚠️ 依赖 Web Serial API，**只有 Chromium 系（Chrome / Edge）能用**，
+   *    Safari 和 Firefox 打不开串口；且必须 HTTPS 或 localhost。
+   *    这条要是在卡片上写清楚，比让人点进去发现连不上强。
+   */
+  { id: 'b22', categoryId: 'dev', name: '串口助手', url: 'https://serial.xywml.com/', description: '在线串口调试与固件升级', icon: 'https://serial.xywml.com/apple-touch-icon.png', sortOrder: 5 },
 
   { id: 'b6', categoryId: 'design', name: 'Figma', url: 'https://www.figma.com', description: '在线协作设计工具', icon: 'https://static.figma.com/app/icon/2/touch-120.png', sortOrder: 0 },
   { id: 'b7', categoryId: 'design', name: 'Dribbble', url: 'https://dribbble.com', description: '设计师灵感社区', sortOrder: 1 },

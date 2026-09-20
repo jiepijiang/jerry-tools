@@ -241,11 +241,38 @@ src/
 
 | 想改什么 | 改哪里 |
 | --- | --- |
-| 分类与书签 | 直接在界面里编辑（编辑模式），或改 `src/data/seed.js` 后清空 localStorage |
+| 分类与书签 | 直接在界面里编辑（编辑模式），或改 `src/data/seed.js` |
 | 发现页站点 | `src/data/seed-discover.js` |
 | 主题色 / 图标配色 | `src/data/themeColors.js` + `src/styles/root.css` |
 | 文案 | `src/data/i18n.js` |
 | 站名 / 图标 | `index.html` 的 `<title>` 与 meta、`src/data/i18n.js` 的 `app.name` |
+
+### 改种子数据时**必须同步升版本号**
+
+种子只在 **localStorage 为空**时灌进去。所以光改 `src/data/seed.js`，
+老用户（包括你自己 —— 浏览器里早就有数据了）**永远看不到新条目**，
+表现是「代码改了、部署也成功了，但打开还是老样子」，特别容易误判成没部署成功。
+
+正确做法是两步：
+
+1. 改 `src/data/seed.js` 加条目（用一个新的、没被占用的 id）
+2. 在 `src/composables/useStore.js` 里 `SEED_VERSION` **+1**，
+   并把新 id 登记到 `SEED_ADDITIONS`
+
+```js
+const SEED_VERSION = 3
+
+const SEED_ADDITIONS = {
+  2: { bookmarks: ['b22'] },
+  3: { bookmarks: ['b23', 'b24'] },   // ← 新的一版
+}
+```
+
+启动时 `syncSeedAdditions()` 会把登记过的 id 补进已有数据，**只增不删**。
+
+> ⚠️ 迁移**只补 `SEED_ADDITIONS` 里列出的 id**，不要写成「补所有缺失的 id」——
+> 那样会把用户自己删掉的条目复活（他删了 GitHub，下次打开又回来了）。
+> 验收脚本里专门有一条测这个，见 `/tmp` 的 `verify-serial.mjs` 场景 D。
 
 > 清空数据重来：浏览器控制台执行 `Object.keys(localStorage).filter(k => k.startsWith('jt:')).forEach(k => localStorage.removeItem(k))`，然后刷新。
 

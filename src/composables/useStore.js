@@ -47,6 +47,30 @@ async function withRollback(mutate, rollback, storageKey, storageValue) {
 
 /* ------------------------------------------------------------------ 初始化 */
 
+/**
+ * 种子数据版本号。
+ *
+ * **每次给 `seedCategories` / `seedBookmarks` / `seedSites` 增删条目，都要 +1，
+ * 并在下面 `SEED_ADDITIONS` 里登记这一版新增了哪些 id。**
+ *
+ * 为什么需要这个：`seedIfEmpty()` 只在**存储为空**时灌种子。
+ * 老用户 localStorage 里已经有数据，之后往种子里加的条目他们**永远看不到** ——
+ * 表现是「代码改了、部署也成功了，但自己打开还是老样子」，
+ * 特别容易误判成没部署成功。
+ */
+const SEED_VERSION = 2
+
+/**
+ * 每个版本**新增**的条目 id，按实体分组。
+ *
+ * ⚠️ 迁移时**只补这里列出的 id**，不要写成「补所有缺失的 id」——
+ * 后者会把用户自己删掉的条目复活（他把 GitHub 删了，下次打开又回来了）。
+ */
+const SEED_ADDITIONS = {
+  // v2（2026-09-20）：导航主页「开发工具」加一条在线串口助手
+  2: { bookmarks: ['b22'] },
+}
+
 /** 首次启动时把种子数据写进去。 */
 async function seedIfEmpty() {
   const cats = await storage.read(storageKeys.categories)
@@ -74,11 +98,48 @@ async function seedIfEmpty() {
   }
 }
 
+/**
+ * 把种子里**新增**的条目补进已有数据。只增不删、不改已有条目。
+ *
+ * 全新用户这里是空操作（种子刚灌进去，id 都在），所以可以无条件调用。
+ * 老用户则会把 SEED_VERSION 之后新增的条目补上。
+ *
+ * 幂等：跑完把 SEED_VERSION 落盘，下次直接返回。
+ */
+async function syncSeedAdditions() {
+  // 读不到（全新用户 / 老版本升级上来）就当作 1，从 v2 开始补
+  const saved = Number(await storage.read(storageKeys.seedVersion)) || 1
+  if (saved >= SEED_VERSION) return
+
+  let changed = false
+
+  for (let v = saved + 1; v <= SEED_VERSION; v++) {
+    const plan = SEED_ADDITIONS[v]
+    if (!plan) continue
+
+    // 目前只有 bookmarks 会增条目。以后 categories / sites 也要补的话，
+    // 在这里按同样的模式加分支即可。
+    for (const id of plan.bookmarks || []) {
+      if (state.bookmarks.some((b) => b.id === id)) continue
+      const fresh = seedBookmarks.find((b) => b.id === id)
+      if (!fresh) continue // 登记了但种子里没有 —— 静默跳过，别让整次初始化挂掉
+      state.bookmarks.push(clone(fresh))
+      changed = true
+    }
+  }
+
+  if (changed) await persist(storageKeys.bookmarks, state.bookmarks)
+  // 即使没变化也记上版本，避免每次启动都重跑一遍
+  await persist(storageKeys.seedVersion, SEED_VERSION)
+}
+
 /** 应用启动时调一次。 */
 export async function initStore() {
   if (state.ready) return
 
   await seedIfEmpty()
+  // 紧跟其后：给老用户补种子里新增的条目（全新用户这里是空操作）
+  await syncSeedAdditions()
 
   state.favorites = (await storage.read(storageKeys.favorites)) || []
   state.submissions = (await storage.read(storageKeys.submissions)) || []
