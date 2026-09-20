@@ -9,7 +9,7 @@
  *
  * 卡片列数由设置里的 perRow 决定；展示范围 full 时去掉最大宽度限制。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import BookmarkCard from '@/components/BookmarkCard.vue'
 import BookmarkDialog from '@/components/BookmarkDialog.vue'
@@ -88,6 +88,23 @@ const wrapperClass = computed(() => [
   `layout-${settings.layout}`,
   settings.displayScope === 'full' ? 'full-width' : 'std-width',
 ])
+
+/* ---------------------------------------------------------------- 副作用 */
+
+/**
+ * 切换分类后把页面滚回顶部。
+ *
+ * 不重置的话：你滚到页面下方再点另一个分类，新分类的链接是从上往下铺的，
+ * 而滚动位置还停在原来的高度 —— 看到的是新分类的中段甚至空白。
+ * （实测：滚到 3000px 时切换分类，第一张卡片落在视口 y=-2749，
+ *  用户必须手动往上滚才能看到第一条链接。）
+ *
+ * 用 auto 而不是 smooth：页面可能有一万多像素高，平滑滚动会拖很久，
+ * 而且滚动过程中内容还在重排，观感很差。
+ */
+watch(activeCategory, () => {
+  window.scrollTo({ top: 0, behavior: 'auto' })
+})
 
 /* ---------------------------------------------------------------- 操作 */
 
@@ -379,6 +396,10 @@ async function quickToggleEdit() {
 
 <style scoped>
 .home {
+  /* ⚠️ align-items 默认是 stretch，会把侧栏拉到和右侧内容一样高
+     （997 条书签时实测 15985px），侧栏里的 sticky / overflow 全部失效。
+     必须显式 flex-start，侧栏才能靠自己的 height + position:sticky 工作。 */
+  align-items: flex-start;
   display: flex;
   gap: 18px;
   margin: 0 auto;

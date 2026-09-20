@@ -152,7 +152,18 @@ function onDrop(targetId) {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  /* 高度锁在视口内并吸顶，否则会被 .home 的 flex 拉伸到内容高度
+     （实测 997 条书签时侧栏高 15985px），后果是：
+       · 分类列表只存在于页面最顶上那一段，往下滚就看不见了
+       · `.sb-list` 的 overflow-y:auto 永远不触发（它自己就有 15915px 高）
+       · 分类一多就没法管理 —— 这正是「分类太多导致切换后看不到链接」的根源
+     top 的 80px = 顶栏 62px + .home 的 18px 内边距；
+     高度再减 18px 给底部留白。 */
+  height: calc(100vh - 98px);
+  height: calc(100dvh - 98px);
   padding: 12px 8px;
+  position: sticky;
+  top: 80px;
   transition: width 0.28s ease;
   width: 196px;
 }
@@ -180,6 +191,10 @@ function onDrop(targetId) {
   flex: 1;
   flex-direction: column;
   gap: 2px;
+  /* ⚠️ min-height:0 不能少。flex 子项的默认 min-height 是 auto，
+     内容多高它就撑多高，overflow-y:auto 永远不会生效（滚动条根本不出现）。
+     侧栏高度锁死之后，这一句才让分类列表真的能在内部滚动。 */
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -341,6 +356,10 @@ function onDrop(targetId) {
 
 @media (max-width: 760px) {
   .sidebar {
+    /* 窄屏 .home 变成纵向排列，侧栏是一条横向滚动的分类条，
+       吸顶 + 锁高会把它压成一条细缝，必须退回普通流式布局。 */
+    height: auto;
+    position: static;
     width: 100%;
   }
 
