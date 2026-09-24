@@ -24,10 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        # v5 → v7：v6 把凭据从 .git/config 挪到单独文件（更安全），
+        # v7 限制 fork PR 的检出（我们用 push 触发，不受影响）。
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        # v5 → v7：加了 cache-primary-key / cache-matched-key 两个输出，
+        # 其余是依赖升级与 ESM 迁移，无行为变更。
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
