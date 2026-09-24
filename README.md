@@ -114,7 +114,8 @@ Pages 的 source 必须是 **GitHub Actions**。
   （多设备场景下那是灾难）
 - **实时多端同步**：登录后订阅自己的表，另一台设备的改动**不用刷新**就出现。
   顶栏头像右下角有个状态点（绿=已连接 / 黄=连接中 / 红=断开），
-  点开有文字说明。需要先跑 `supabase/migrations/003-realtime.sql`，见下方专节
+  点开有文字说明。**本项目已经跑过 `supabase/migrations/003-realtime.sql`**；
+  换新库或老库升级时要单独跑一次，见下方专节
 
 ### 管理后台
 
@@ -462,12 +463,13 @@ const SEED_ADDITIONS = {
 实现在 `src/composables/useRealtime.js`，订阅清单在
 `src/data/adapters/cloud.js` 的 `REALTIME_TABLES`。
 
-> ⚠️ **必须先跑一次 `supabase/migrations/003-realtime.sql`。**
+> ⚠️ **依赖一次迁移：`supabase/migrations/003-realtime.sql`。**
 > 新建的表不会自动进 `supabase_realtime` 发布，不跑的话功能**静默失效**：
 > `subscribe()` 照样报 `SUBSCRIBED`，但一条事件都收不到。
-> 详见 `supabase/README.md` 的「六、实时同步」。
+> 从零建库时 `schema.sql` 的 D 节已经包含这段，不用额外跑；
+> **本项目（2026-09-24）与任何老库**都要单独跑一次。详见 `supabase/README.md` 的「六、实时同步」。
 
-三个设计要点：
+四个设计要点：
 
 1. **幂等应用 = 免费的回声抑制。** 自己写下去的改动会被服务端原样回推一份。
    这里的做法是「拿到变更先和 state 现值比，一样就什么都不做」，
@@ -478,6 +480,10 @@ const SEED_ADDITIONS = {
    上面那条比较有一个明确的判据。
 3. **重连后必须全量重读。** `postgres_changes` 没有回放，
    断线期间的事件永远补不回来。
+4. **切到云端后要重读一次设置。** `initSettings()` 只在应用启动时跑过一次，
+   而那一刻还是本地模式 —— 不重读的话，别的设备改的主题 / 编辑模式登录后不生效，
+   而且 `user_settings` 那张快照根本没建，别人一改设置本机就全量重读。
+   退出登录时同理，要把本机那一份换回来。
 
 ---
 

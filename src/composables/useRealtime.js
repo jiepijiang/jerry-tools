@@ -196,8 +196,13 @@ function handleChange(key, payload) {
   if (!change) return
 
   if (change.op === 'reload') {
-    // 快照缺失（比如刚登录还没读完）—— 别就地建快照，全量读一次
-    resync('快照缺失')
+    /**
+     * 快照缺失（比如刚登录还没读完）—— 别就地建快照，全量读一次。
+     * ⚠️ 日志**必须带上 key**：只说「快照缺失」没法定位是哪张表没读过。
+     *    （踩过：user_settings 就是这样 —— initSettings 只在启动时跑过一次，
+     *      那时还是本地模式，切到云端后没人再读，于是别人一改设置就全量重读。）
+     */
+    resync(`快照缺失:${key}`)
     return
   }
 

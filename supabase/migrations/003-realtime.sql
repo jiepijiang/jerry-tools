@@ -1,9 +1,13 @@
 -- =========================================================================
 -- 003 —— 实时多端同步（Realtime / postgres_changes）
 -- -------------------------------------------------------------------------
--- 执行方式（二选一）：
---   A. Supabase Dashboard → SQL Editor → 粘贴全文 → Run
---   B. Management API：node tools/run-sql.mjs supabase/migrations/003-realtime.sql
+-- 执行方式：
+--   Supabase Dashboard → SQL Editor → 粘贴全文 → Run
+--   （本项目没有 service_role / Management API PAT，所以只能走 Dashboard。
+--     若以后加了 PAT，也可以 POST /v1/projects/{ref}/database/query 直接跑。）
+--
+-- 跑完**看结果网格**：最后那句 select 应该正好返回 10 行。
+-- 少于 10 行就说明有表没进去 —— 别只看有没有报错。
 --
 -- 背景
 -- -------------------------------------------------------------------------
@@ -108,8 +112,11 @@ end $$;
 
 
 -- ------------------------------------------------- 3. 收尾自检
--- 跑完把结果打出来，方便一眼确认「到底进去了几张」。
--- 期望 10 行。
+-- ⚠️ 这是**唯一权威**的验收方式。
+--    别用「远程订阅一下看报不报错」来验收：那个读数会假阳性
+--    （踩过：一个通道订 10 张表时服务端只回一条错误，脚本把另外 9 张
+--      没发布的表报成了「已发布」，而且连续两轮都这样）。
+--    直接读 pg_publication_tables 没有中间商。
 
 do $$
 declare
@@ -122,4 +129,14 @@ begin
   where pubname = 'supabase_realtime' and schemaname = 'public';
 
   raise notice 'supabase_realtime 现有 % 张 public 表：%', n, coalesce(listing, '(空)');
+  if n < 10 then
+    raise warning '只进去 % 张，期望 10 张 —— 翻上面的 warning 看是哪张被跳过了', n;
+  end if;
 end $$;
+
+
+-- ------------------------------------------------- 4. 结果网格（应该正好 10 行）
+select tablename as "已发布的表"
+from pg_publication_tables
+where pubname = 'supabase_realtime' and schemaname = 'public'
+order by tablename;

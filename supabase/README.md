@@ -17,8 +17,9 @@
 | `seed-discover.mjs` | 灌发现页的 377 条种子 | 建完表之后跑一次 |
 | `verify-rls.mjs` | RLS 隔离性验证（45 条成对断言） | 改过任何策略 / 主键之后**必跑** |
 
-> `003-realtime.sql` 是**必须单独跑一次**的（老库）—— 详见「六、实时同步」。
+> `003-realtime.sql` 是**老库必须单独跑一次**的迁移 —— 详见「六、实时同步」。
 > 不跑的话功能不会报错，只会**静默失效**。
+> ✅ 本项目已于 2026-09-24 跑过（10 张表全部进了 `supabase_realtime`）。
 
 ---
 
@@ -37,13 +38,35 @@
 
 ### 已经建过、要打补丁
 
-按编号顺序执行 `migrations/`：
+按编号顺序执行 `migrations/` 下的三个文件：
+
+```
+supabase/migrations/001-composite-pk.sql
+supabase/migrations/002-share-slug-unique.sql
+supabase/migrations/003-realtime.sql
+```
+
+**两种执行方式**（本仓库**没有** `run-sql.mjs`，别照着找）：
+
+1. **Dashboard → SQL Editor** —— 粘贴全文 → Run。最省事，不需要额外凭据。
+2. **Management API**（想脚本化时用，需要一个 **Account 级** PAT，
+   在 `https://supabase.com/dashboard/account/tokens` 生成，前缀 `sbp_`）：
 
 ```bash
-node /path/to/run-sql.mjs supabase/migrations/001-composite-pk.sql
-node /path/to/run-sql.mjs supabase/migrations/002-share-slug-unique.sql
-node /path/to/run-sql.mjs supabase/migrations/003-realtime.sql
+# ⚠️ PAT 别写进命令行参数 —— `ps` 里能看到。用环境变量或文件。
+REF=<project-ref>
+curl -s -X POST "https://api.supabase.com/v1/projects/$REF/database/query" \
+  -H "Authorization: Bearer $SUPABASE_PAT" -H 'Content-Type: application/json' \
+  -d "$(node -e 'console.log(JSON.stringify({query:require("fs").readFileSync(process.argv[1],"utf8")}))' \
+        supabase/migrations/003-realtime.sql)"
 ```
+
+> 🔴 **别拿 `sb_publishable_...` / `sb_secret_...` 当 PAT** —— 那是**项目**里的
+> API key（等价于 anon / service_role），只能按 RLS 读写数据，**跑不了 DDL**。
+> 报错是 `401 {"message":"JWT could not be decoded"}`，
+> 看起来像 token 失效，其实是拿错了东西。判断方法：拿它打一下
+> `GET <ref>.supabase.co/rest/v1/<表>?select=id`，如果返回 200，
+> 说明 key 本身有效、只是类型不对。
 
 每个迁移都是幂等的，重复跑安全。
 
@@ -201,7 +224,10 @@ create policy profiles_update on public.profiles
 代码在 `src/composables/useRealtime.js`，表清单在 `src/data/adapters/cloud.js`
 的 `REALTIME_TABLES`（与 `SPECS` 同源，表名只写一处）。
 
-### 必须先跑一次 `003-realtime.sql`
+### 依赖一次迁移：`003-realtime.sql`
+
+> ✅ **本项目已经跑过（2026-09-24）**，10 张表全部进了发布。
+> 从零建库时 `schema.sql` 的 D 节已包含这段；**老库 / 换新库**才需要单独跑一次。
 
 **不跑不会报错，只会静默失效** —— 这是这个功能最坑的地方：
 
@@ -220,6 +246,28 @@ create policy profiles_update on public.profiles
 Unable to subscribe to changes with given parameters.
 Please check Realtime is enabled for the given connect parameters:
   [event: *, schema: public, table: bookmarks, ...]
+```
+
+### 怎么验收「表到底进没进发布」
+
+**只看 `pg_publication_tables`，别用远程订阅探测下结论。**
+
+远程探测会**假阳性**，而且方向最危险（把没发布的表报成已发布）。
+踩过的两个坑：
+
+1. **一个通道订 N 张表会假阳性。** 本以为是「服务端为每张没发布的表各发一条
+   system 错误」，实际服务端**只回了一条**（最后那张），另外 9 张一条都没发。
+   脚本于是把 9 张没发布的表报成「✅ 已发布」。**单绑定才准。**
+2. **单绑定下，整轮的第一张表（冷连接）会假阳性。** 收到 `SUBSCRIBED` 之后
+   还要留一段安静期（实测 2.5s 够）再下结论。
+
+所以 `003-realtime.sql` 末尾直接放了一句 `select ... from pg_publication_tables`，
+**跑完看结果网格应该正好 10 行** —— 没有中间商：
+
+```sql
+select tablename from pg_publication_tables
+where pubname = 'supabase_realtime' and schemaname = 'public'
+order by tablename;
 ```
 
 ### 两个不显眼的约束
