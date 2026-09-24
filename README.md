@@ -203,8 +203,12 @@ Vue 3 `<script setup>` + Vite 6 + vue-router 4，无 UI 框架、无 CSS 预处�
 
 ```
 src/
+├── App.vue              根组件（主题属性 / 全局壳）
+├── main.js              入口（初始化顺序 settings → auth → store，不能换）
+├── router/
+│   └── index.js         路由表（含 /s/:slug 分享页）
 ├── components/          组件
-│   ├── AppIcon.vue          图标（Lucide 风格描边，60+ 个）
+│   ├── AppIcon.vue          图标（Lucide 风格描边，83 个）
 │   ├── BookmarkCard.vue     书签卡片（3 种风格）
 │   ├── BookmarkIcon.vue     站点图标（favicon + 渐变字母兜底）
 │   ├── WeatherIcon.vue      天气动效图标
@@ -227,10 +231,9 @@ src/
 │   ├── useI18n.js       中英文案
 │   └── useToast.js      轻提示队列
 ├── data/
-│   ├── storage.js       数据适配层（路由：本地 ↔ 云端，含转发对象）
+│   ├── storage.js       数据适配层：路由 + localStorage 实现 + 转发对象
 │   ├── supabase.js      Supabase 客户端单例（未配置时导出 null）
 │   ├── adapters/
-│   │   ├── local.js         localStorage 适配器
 │   │   └── cloud.js         Supabase 适配器（整表写 → 行级 diff 的翻译层）
 │   ├── seed.js          分类与书签种子数据
 │   ├── seed-discover.js 发现页种子数据（377 条）
@@ -252,8 +255,9 @@ src/
     ├── LoginView.vue    登录 / 注册 / 资料
     └── ShareView.vue    分享页
 
-supabase/                后端（建表 / 迁移 / 种子 / 验证），见其中的 README
-├── schema.sql           全量建表脚本
+supabase/                后端（建表 / 迁移 / 种子 / 验证），操作手册见其中的 README
+├── README.md            后端操作手册（建表 / 迁移 / 灌种子 / 验证 / 已知限制）
+├── schema.sql           全量建表脚本（11 表 / 5 函数 / 4 触发器 / 23 策略）
 ├── migrations/          增量迁移
 ├── seed-discover.mjs    灌 377 条发现页种子（幂等）
 └── verify-rls.mjs       RLS 隔离性验证（45 条成对断言）
@@ -404,7 +408,7 @@ const SEED_ADDITIONS = {
 
 **第 4 项为什么评估错了**：原评估假设「接口是整表语义 → 上层必须改成行级」。
 实际上在适配器里加一层 diff 就够了 —— 上层继续写整表，适配器负责算增量。
-省下的不是小工作量，是整个 `useStore` 562 行的改动风险。
+省下的不是小工作量，是整个 `useStore`（评估时 562 行，现已 622 行）的改动风险。
 
 **第 10 项为什么不能用视图**：用视图就得给 `categories` / `bookmarks`
 开一条「anon 可读」的策略 —— 那是把**所有用户**的书签都暴露出去。
