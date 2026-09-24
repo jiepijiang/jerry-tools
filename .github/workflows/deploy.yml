@@ -9,6 +9,11 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  # ⚠️ 这个 `permissions` 是**白名单**：没列出来的权限一律是 none。
+  #    `actions/deploy-pages` 的文档要求 `actions: read`（它要按 artifact id
+  #    去取上传的产物）。v4 时不写也能跑，但那是在吃默认值的运气 ——
+  #    显式写上，别依赖隐式行为。
+  actions: read
 
 concurrency:
   group: pages
@@ -65,10 +70,13 @@ jobs:
           fi
 
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        # v5 → v6 只是升到 Node 24，无行为变更（v5 那个 breaking change
+        # 是给 Next.js < 13.3 的，本项目是 Vite，用不到）。
+        uses: actions/configure-pages@v6
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+        # v4 → v5 只是把内部的 upload-artifact 升到 v7，无行为变更。
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./dist
 
@@ -81,4 +89,5 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        # v4 → v5 只是升到 Node 24.x，无行为变更。
+        uses: actions/deploy-pages@v5
