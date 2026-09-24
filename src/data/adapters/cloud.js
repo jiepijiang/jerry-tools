@@ -320,6 +320,25 @@ function rowChanged(prevRow, nextRow) {
 }
 
 /**
+ * **服务端维护**的列 —— 客户端只读，永远不写。
+ *
+ * `collects`（收藏数）由 `favorites` 上的触发器增量维护
+ * （见 `supabase/migrations/004-discover-collects.sql`）。
+ *
+ * 前端为了即时反馈会在内存里 ±1（见 useStore 的 toggleFavorite），
+ * 但那个值**绝不能**写回库，两个理由：
+ *   1. 非 admin 会被 `discover_sites` 的 update 策略挡下 ——
+ *      不报错、只在控制台刷一屏 warning；
+ *   2. admin 能写，于是把**本地估算的绝对值**盖上去 ——
+ *      会直接抹掉别的设备刚产生的收藏。而且一旦是 admin，
+ *      这个 bug 只在他自己账号上出现，更难发现。
+ *
+ * 所以算 diff 时先把它摘掉：这样即使内存里的 collects 变了，
+ * 也既不会触发 RPC、也不会触发 update。
+ */
+const SERVER_MANAGED_COLUMNS = new Set(['collects'])
+
+/**
  * 发现页站点的特殊写入。
  *
  * 站点是全局数据，普通用户没有 update 权限（RLS 会挡）。
@@ -338,7 +357,9 @@ async function writeSites(prevRows, nextRows) {
     if (!prev) {
       // 新提交的站点 —— 只有 admin 能直接插 approved，
       // 普通用户插 pending 由 RLS 放行
-      const { error } = await supabase.from('discover_sites').insert(row)
+      const fresh = { ...row }
+      for (const c of SERVER_MANAGED_COLUMNS) delete fresh[c]
+      const { error } = await supabase.from('discover_sites').insert(fresh)
       if (error) {
         console.warn('[cloud] 插入站点失败（多半是权限）：', row.id, error.message)
         ok = false
@@ -346,7 +367,7 @@ async function writeSites(prevRows, nextRows) {
       continue
     }
 
-    const changed = changedColumns(prev, row)
+    const changed = changedColumns(prev, row).filter((c) => !SERVER_MANAGED_COLUMNS.has(c))
     if (!changed.length) continue
 
     if (changed.length === 1 && changed[0] === 'views') {

@@ -538,13 +538,61 @@ export async function deleteSite(id) {
   return withRollback(() => {}, () => { state.sites = prev }, storageKeys.sites, state.sites)
 }
 
+/**
+ * 收藏 / 取消收藏一个发现页站点。
+ *
+ * ⚠️ `collects`（收藏数）的**权威值在服务端** —— 由 `favorites` 上的
+ *    触发器维护，见 `supabase/migrations/004-discover-collects.sql`。
+ *    这里只在**内存里** ±1 做即时反馈，**不落盘**：
+ *      - 落盘也没用：cloud.js 的 SERVER_MANAGED_COLUMNS 会把这列从 diff 摘掉
+ *        （客户端不许写它）；
+ *      - 下次 `loadAll()`（刷新 / 登录 / 实时重连）会从库里读回真值，
+ *        本地的估算自动被纠正，所以不怕算错。
+ *    多设备场景下另一台设备的 ±1 由实时层补，见 useRealtime 的 applyChange。
+ */
 export async function toggleFavorite(siteId) {
   const prev = clone(state.favorites)
+  const site = state.sites.find((s) => s.id === siteId)
+  const prevCollects = site?.collects
   const i = state.favorites.indexOf(siteId)
-  if (i >= 0) state.favorites.splice(i, 1)
-  else state.favorites.push(siteId)
-  const ok = await withRollback(() => {}, () => { state.favorites = prev }, storageKeys.favorites, state.favorites)
-  return ok ? i < 0 : null
+  const adding = i < 0
+
+  if (adding) state.favorites.push(siteId)
+  else state.favorites.splice(i, 1)
+  if (site) site.collects = Math.max(0, (site.collects || 0) + (adding ? 1 : -1))
+
+  const ok = await withRollback(
+    () => {},
+    () => {
+      state.favorites = prev
+      // 计数是跟着收藏一起动的，回滚时也要一起退回去
+      if (site && prevCollects !== undefined) site.collects = prevCollects
+    },
+    storageKeys.favorites,
+    state.favorites,
+  )
+  return ok ? adding : null
+}
+
+/**
+ * 把某个站点的收藏数 ±1。
+ *
+ * 给**实时层**用：同一账号的另一台设备收藏/取消收藏了站点时，
+ * `favorites` 的变更会推过来，但 `discover_sites` 不在实时订阅里
+ * （它是全局表，订阅它等于把每个用户的每次浏览广播给所有人），
+ * 所以这边的计数得自己跟着动一下。
+ *
+ * 只覆盖「同一个账号的另一台设备」。**别人的收藏收不到** ——
+ * favorites 的订阅过滤列是 user_id，RLS 也只放行自己的行。
+ * 想看别人的最新计数，得等下一次全量读。
+ *
+ * 找不到站点（比如是待审的、当前用户看不到）就静默跳过。
+ */
+export function bumpSiteCollects(siteId, delta) {
+  const s = state.sites.find((x) => x.id === siteId)
+  if (!s) return false
+  s.collects = Math.max(0, (s.collects || 0) + delta)
+  return true
 }
 
 export async function incrementSiteViews(id) {

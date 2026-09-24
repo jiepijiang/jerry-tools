@@ -12,7 +12,7 @@
 
 | 文件 | 作用 | 什么时候跑 |
 | --- | --- | --- |
-| `schema.sql` | **全量**建表脚本（11 表 / 5 函数 / 4 触发器 / 23 策略 + realtime 发布） | 新项目从零开始建 |
+| `schema.sql` | **全量**建表脚本（11 表 / 6 函数 / 5 触发器 / 23 策略 + realtime 发布） | 新项目从零开始建 |
 | `migrations/*.sql` | 增量修复 | 库已经建过，按编号顺序补 |
 | `seed-discover.mjs` | 灌发现页的 377 条种子 | 建完表之后跑一次 |
 | `verify-rls.mjs` | RLS 隔离性验证（45 条成对断言） | 改过任何策略 / 主键之后**必跑** |
@@ -20,6 +20,10 @@
 > `003-realtime.sql` 是**老库必须单独跑一次**的迁移 —— 详见「六、实时同步」。
 > 不跑的话功能不会报错，只会**静默失效**。
 > ✅ 本项目已于 2026-09-24 跑过（10 张表全部进了 `supabase_realtime`）。
+>
+> `004-discover-collects.sql` 同理，**老库也要单独跑一次** —— 详见「八、收藏数」。
+> 不跑的话「收藏数」就是死值，点了收藏数字不动。
+> ✅ 本项目已跑过。
 
 ---
 
@@ -38,12 +42,13 @@
 
 ### 已经建过、要打补丁
 
-按编号顺序执行 `migrations/` 下的三个文件：
+按编号顺序执行 `migrations/` 下的四个文件：
 
 ```
 supabase/migrations/001-composite-pk.sql
 supabase/migrations/002-share-slug-unique.sql
 supabase/migrations/003-realtime.sql
+supabase/migrations/004-discover-collects.sql
 ```
 
 **两种执行方式**（本仓库**没有** `run-sql.mjs`，别照着找）：
@@ -118,7 +123,17 @@ node supabase/seed-discover.mjs
 ```
 
 377 条发现页站点。**幂等** —— id 由 url 的 djb2 哈希确定，
-重复执行只会覆盖同样的行，不会翻倍。
+重复执行不会翻倍。
+
+> ⚠️ **重跑不会覆盖 `views` / `collects`。** 这两列是运行期累加值
+> （见「八、收藏数」）。脚本拆成两步：先只插不存在的行（带上基数），
+> 再对已有行做一次**只含元数据列**的 upsert ——
+> PostgREST 的 `merge-duplicates` 生成的 `ON CONFLICT DO UPDATE SET`
+> 只包含 payload 里出现的列，所以那两个计数不会被碰。
+> 跑完会打印两个计数的合计与种子基数对比，用来确认没被重置。
+>
+> （别改成 `PATCH` + 数组 body：PostgREST 的 PATCH 是「一个对象套给所有匹配行」，
+> 逐行不同值它做不到。）
 
 ---
 
@@ -190,10 +205,14 @@ RLS 写错的失败方式**非常隐蔽**：
 | `feedback` | 反馈 | `(user_id, id)` |
 | `discover_sites` | 发现页站点（**全局数据**） | `id` |
 
-### 三个 `SECURITY DEFINER` 函数，都不是「优化」
+### 四个 `SECURITY DEFINER` 函数，都不是「优化」
 
 - `is_admin()` —— 它要读开着 RLS 的 `profiles`。普通 invoker 函数会撞策略递归。
 - `increment_discover_site_views()` —— 匿名访客要改一张只有 admin 能写的表。
+- `sync_discover_site_collects()` —— **触发器函数**，不是 RPC。
+  触发器函数默认以调用者身份执行，而调用者是普通用户，
+  会被 `discover_sites` 的 update 策略挡下 —— 表现是「收藏成功但数字不动」，
+  连报错都没有。详见「八、收藏数」。
 - `get_shared_nav(slug)` —— 匿名访客要读别人只有主人能读的 `categories` / `bookmarks`。
 
 ### 分享页为什么用函数而不是 view
@@ -290,6 +309,11 @@ order by tablename;
 **任何一个用户的每一次点击都会广播给所有在线设备** —— 377 条站点列表的流量和
 CPU 白烧，而用户看不出差别。所以发现页的浏览 / 收藏数不做实时，需要时刷新即可。
 
+> 唯一的例外是**同一账号的另一台设备**：那边走 `favorites` 的实时事件
+> （`favorites` 本来就在订阅里），前端顺手把本地的收藏数 ±1。
+> **别人**的收藏仍然要等下次全量读 —— 订阅过滤列是 `user_id`，
+> RLS 也只放行自己的行，别人的事件根本收不到。
+
 ### 断线重连要补一次全量读
 
 `postgres_changes` **没有回放**。断线期间的事件永远补不回来，
@@ -317,6 +341,99 @@ node /path/to/realtime-ui.mjs
   真要删人请去 Dashboard → Authentication → Users。
 - **`discover_sites` 是全局表**，普通用户没有写权限。前端在云端模式下
   不会把它落盘（只在内存里兜底显示），否则登录后会把 377 条种子写一遍、
-  刷一屏 RLS 报错。浏览量走 `increment_discover_site_views` 这个 RPC，人人可用。
+  刷一屏 RLS 报错。浏览量走 `increment_discover_site_views` 这个 RPC，人人可用；
+  收藏数走 `favorites` 上的触发器，客户端**完全不参与**（见「八、收藏数」）。
 - **发送确认邮件需要自备 SMTP。** 默认 SMTP 有严格限流，
   本项目索性关掉了邮箱确认（见上文「认证设置」）。
+
+---
+
+## 八、收藏数（`discover_sites.collects`）
+
+### 依赖一次迁移：`004-discover-collects.sql`
+
+> ✅ **本项目已跑过。** 从零建库时 `schema.sql` 的 B 节已包含这段；
+> **老库 / 换新库**才需要单独跑一次。
+
+不跑的话不会报错 —— 收藏功能一切正常，只有**数字永远不动**。
+因为 `collects` 原本只是种子灌进去的静态值。
+
+### 怎么做
+
+`favorites` 上挂一个 `AFTER INSERT OR DELETE` 触发器，增量维护
+`discover_sites.collects`：插一行 +1，删一行 −1。
+
+```sql
+create or replace function public.sync_discover_site_collects()
+returns trigger language plpgsql security definer set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' then
+    update public.discover_sites set collects = collects + 1 where id = new.site_id;
+    return new;
+  end if;
+  update public.discover_sites set collects = greatest(collects - 1, 0) where id = old.site_id;
+  return old;
+end $$;
+```
+
+**为什么不能让客户端写**：
+
+1. `discover_sites` 的 update 策略只放行 admin，普通用户点收藏根本写不动；
+2. 就算包一层 SECURITY DEFINER 的 RPC，客户端也得**先知道**收藏前服务端的最新值 ——
+   两台设备同时收藏同一个站点，各自拿旧值 +1，就会**少算一次**。
+   触发器跟着 `favorites` 的写入在**同一个事务**里跑，天然正确。
+
+**为什么不用 `count(*)` 实时算**：那要么每张卡片一个子查询（377 次聚合），
+要么再加一列 `base_collects`，变成两个真相来源。增量维护最简单。
+
+### 语义是「种子基数 + 真实收藏」
+
+和 `views` 一致 —— 种子那 377 条的 `collects` 是参考站的热度数据，
+清零会让「按收藏排序」退化成一堆 0。想要**纯真实计数**，跑 `004` 末尾那一行：
+
+```sql
+update public.discover_sites s
+   set collects = (select count(*) from public.favorites f where f.site_id = s.id);
+```
+
+### 客户端只做即时反馈，不落盘
+
+`toggleFavorite` 会在内存里 ±1（写盘失败时跟着 `favorites` 一起回滚），
+但 `cloud.js` 的 `SERVER_MANAGED_COLUMNS` 会把 `collects` 从 diff 里摘掉。
+**摘掉是必须的**，两个理由：
+
+| 不摘的后果 | 谁身上出现 |
+| --- | --- |
+| 发出一次 `update discover_sites set collects = ...`，被 RLS 挡下 | 普通用户（不报错，只刷 warning） |
+| 把本地估算的**绝对值**写回库，盖掉别的设备刚产生的收藏 | 管理员（只在他自己账号上出现，更难发现） |
+
+顺带一个容易漏的点：`collects` 变过之后，再有人点开站点触发浏览量 +1 时，
+`changedColumns` 会同时看到 `views` 和 `collects` —— 不摘掉的话
+`changed.length === 1` 判断失败，就掉进通用 update 分支了。
+单测 C2 专门盯这个。
+
+### 验收
+
+跑完 `004` 看结果网格（应该是一行三列）：
+
+| 触发器 | 收藏行数 | 计数小于收藏的站点数(应为0) |
+| --- | --- | --- |
+| `favorites_sync_collects` | 真实行数 | `0` |
+
+最后一列不为 0 说明有站点漏算了。手工复核用：
+
+```sql
+-- 随便挑几个站点，看 collects 是否 ≥ 它的 favorites 行数
+select s.id, s.title, s.collects,
+       (select count(*) from public.favorites f where f.site_id = s.id) as real_favs
+  from public.discover_sites s
+ order by real_favs desc, s.collects desc
+ limit 10;
+```
+
+离线单测（不需要网络，把 `@/data/supabase` 换成桩）：
+
+```bash
+node --import ./register.mjs unit-cloud.mjs   # 【C】组 14 条断言
+```

@@ -28,7 +28,7 @@ import { reactive } from 'vue'
 import { supabase, supabaseConfigured } from '@/data/supabase'
 import { storageKeys } from '@/data/options'
 import { REALTIME_TABLES, applyRemoteChange } from '@/data/adapters/cloud'
-import { state, reloadStore } from '@/composables/useStore'
+import { state, reloadStore, bumpSiteCollects } from '@/composables/useStore'
 import { applyRemoteSettings } from '@/composables/useSettings'
 
 /**
@@ -151,10 +151,15 @@ function applyChange(key, change) {
       if (change.op === 'remove') {
         if (i < 0) return false
         cur.splice(i, 1)
+        // 收藏数挂在 discover_sites 上，而那张表不在实时订阅里（全局表，
+        // 订阅它会把每个人的每次浏览都广播出去）—— 所以这里手动跟着动一下。
+        // 放在 return false 之后，所以**自己写的回声不会重复计数**。
+        if (key === storageKeys.favorites) bumpSiteCollects(change.id, -1)
         return true
       }
       if (i >= 0) return false
       cur.push(change.id)
+      if (key === storageKeys.favorites) bumpSiteCollects(change.id, +1)
       return true
     }
 

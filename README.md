@@ -104,6 +104,10 @@ Pages 的 source 必须是 **GitHub Actions**。
 - 四种排序：最近收录 / 浏览量 / 收藏数 / 我提交的
 - 收藏、详情弹窗、直接访问
 - 提交网站（走待审核流程）
+- **浏览量与收藏数都是真实数据**：浏览量走 `increment_discover_site_views` RPC，
+  收藏数由 `favorites` 上的触发器维护（见下方「收藏数是怎么算的」）。
+  两者都是「**种子基数 + 真实累加**」—— 种子那 377 条来自参考站的热度数据，
+  清零会让「按收藏排序」退化成一堆 0
 
 ### 用户系统
 
@@ -450,10 +454,35 @@ const SEED_ADDITIONS = {
 
 - **图标改走 Storage**：上传的图标仍以 base64 存在库里。
   图标一般只有几 KB，暂时不值得为它引入 Storage 的权限模型。
-- **发现页的浏览 / 收藏数不做实时**：`discover_sites` 的 `views` 每次点击都变，
+- **发现页的浏览 / 收藏数不做实时**：`discover_sites` 是全局表，`views` 每次点击都变，
   订阅它等于给所有在线设备广播每一次点击。需要时刷新即可。
+  （**同一账号的另一台设备**不算 —— 那边走 `favorites` 的实时事件补计数，
+  见下方「收藏数是怎么算的」。**别人**的收藏仍然要等下次全量读。）
 - **发送确认邮件**：默认 SMTP 限流很严，索性关掉了邮箱确认
   （`mailer_autoconfirm: true`）。要发邮件得自备 SMTP。
+
+---
+
+## 收藏数是怎么算的
+
+`discover_sites.collects` 是**服务端维护**的列，客户端只读不写。
+
+- **谁在维护**：`favorites` 上的触发器 `favorites_sync_collects`
+  （`supabase/migrations/004-discover-collects.sql`），
+  插入一行 +1、删除一行 −1。
+- **为什么不让客户端写**：`discover_sites` 的 update 策略只放行 admin，
+  普通用户点收藏根本写不动；就算包成 SECURITY DEFINER 的 RPC，
+  客户端也得先知道服务端的最新值，多设备下必然算错。
+  触发器跟着 favorites 的写入在**同一个事务**里跑，天然正确。
+- **语义**：种子基数 + 真实收藏数。和 `views` 一致（见「发现页」那节的说明）。
+  想要纯真实计数，跑 `004` 文件末尾「可选：清零基数」那一行。
+- **前端只做即时反馈**：`toggleFavorite` 会在内存里 ±1，但**不落盘** ——
+  `cloud.js` 的 `SERVER_MANAGED_COLUMNS` 会把 `collects` 从 diff 里摘掉。
+  摘掉是必须的：不摘的话非 admin 会刷一屏 RLS warning，
+  而 admin 会把本地估算的**绝对值**写回去，直接盖掉别的设备刚产生的收藏
+  （这个 bug 只在管理员账号上出现，更难发现）。
+- **什么时候纠正**：刷新 / 登录 / 实时重连都会走 `loadAll()`，从库里读回真值，
+  所以本地的估算不怕算错。
 
 ---
 
@@ -468,6 +497,9 @@ const SEED_ADDITIONS = {
 > `subscribe()` 照样报 `SUBSCRIBED`，但一条事件都收不到。
 > 从零建库时 `schema.sql` 的 D 节已经包含这段，不用额外跑；
 > **本项目（2026-09-24）与任何老库**都要单独跑一次。详见 `supabase/README.md` 的「六、实时同步」。
+>
+> ⚠️ 另有一次迁移：`004-discover-collects.sql`（收藏数接真实数据）。
+> 与实时同步无关，但同样**老库要单独跑一次**。
 
 四个设计要点：
 
@@ -493,11 +525,19 @@ const SEED_ADDITIONS = {
 
 - [x] 接 Supabase：账号体系、跨设备同步、分享页、网站审核真正落库
 - [x] 实时多端同步（`supabase.channel()` 订阅表变更）
+- [x] 发现页的 `collects` 收藏数接真实数据（`favorites` 触发器维护，见「收藏数是怎么算的」）
 - [ ] 图标改走 Supabase Storage（当前仍存 base64）
 - [ ] 书签排序支持跨分类拖拽的视觉反馈（当前是落下才生效）
 - [ ] 图标可选的「自动抓取」目前只回退到站点自己的 `/favicon.ico`，
       覆盖率约 57%。想要更高覆盖率需要自建一个抓取 `<link rel="icon">` 的代理服务
       （浏览器端受 CORS 限制做不了）
-- [ ] 发现页的 `collects` 收藏数还没接真实数据（浏览量已接）
+- [ ] **种子数据里有 44 条 icon 指向第三方 favicon 服务**，与
+      `helpers.js` 里「特意不用 Google favicon 服务」的政策冲突。
+      实测：31 条 `icons.duckduckgo.com/ip3/*.ico` + 13 条 `t0.gstatic.com/faviconV2`。
+      这些在国内不可达（或会被限流），表现是这 44 个图标空着走首字母兜底。
+      修法：把它们改写成 `https://<origin>/favicon.ico`（与 `faviconOf` 的策略对齐）。
+      改完要重跑 `seed-discover.mjs`（**现在重跑不会覆盖 views/collects**，安全）。
+      ⚠️ 本地模式的老用户看不到 —— `seedIfEmpty` 只在存储为空时灌种子，
+      要么升 `SEED_VERSION` 走 `SEED_ADDITIONS`，要么让他们重登一次从云端拉。
 - [ ] `.bm-desc` 改成允许两行（或把描述上限写进编辑器的字数校验）。
       现在只剩 0.5px 余量，任何补充说明都塞不进去，见上方「数据层与已知限制」末尾

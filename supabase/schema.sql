@@ -149,6 +149,11 @@ create unique index if not exists share_settings_slug_unique
 
 -- ---------------------------------------------------------- A9. discover_sites
 
+-- ⚠️ `collects` 是**服务端维护**的列：由 favorites 上的触发器增量维护
+--    （种子基数 + 真实收藏数，见 migrations/004-discover-collects.sql）。
+--    客户端**只读不写** —— 前端为了即时反馈会在内存里 ±1，但不落盘
+--    （cloud.js 的 SERVER_MANAGED_COLUMNS 会把这列从 diff 里摘掉）。
+--    灌种子时也要注意：重跑 seed-discover.mjs 不会覆盖它。
 create table if not exists public.discover_sites (
   id           text primary key,
   title        text        not null default '',
@@ -262,6 +267,38 @@ as $$
 $$;
 
 grant execute on function public.increment_discover_site_views(text) to anon, authenticated;
+
+-- 收藏数维护。与浏览量不同，这个**不能**让客户端来加 ——
+-- `discover_sites` 的 update 策略只放行 admin，普通用户写不动；
+-- 而包成 RPC 也躲不过「客户端得先知道服务端最新值」的多设备竞态。
+-- 挂到 `favorites` 上做增量维护，跟着写入在同一个事务里跑，天然正确。
+--
+-- ⚠️ 必须 SECURITY DEFINER：触发器函数默认以调用者身份执行，
+--    普通用户会被 discover_sites 的 update 策略静默挡掉
+--    （表现是「收藏成功但数字不动」，连报错都没有）。
+--
+-- ⚠️ 语义是「**种子基数 + 真实收藏**」，与 views 一致 ——
+--    种子那 377 条的 collects 是参考站的热度数据，清零会让「按收藏排序」失效。
+--    详见 migrations/004-discover-collects.sql。
+create or replace function public.sync_discover_site_collects()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' then
+    update public.discover_sites set collects = collects + 1 where id = new.site_id;
+    return new;
+  end if;
+  update public.discover_sites set collects = greatest(collects - 1, 0) where id = old.site_id;
+  return old;
+end $$;
+
+drop trigger if exists favorites_sync_collects on public.favorites;
+create trigger favorites_sync_collects
+  after insert or delete on public.favorites
+  for each row execute function public.sync_discover_site_collects();
 
 -- 分享页：一次调用把需要的全部数据取回来。
 --
