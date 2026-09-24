@@ -11,6 +11,9 @@ import { storage } from '@/data/storage'
 
 export const settings = reactive({ ...defaultSettings })
 
+/** `matchMedia` 的 change 监听是否已经挂过（initSettings 可以被调用多次）。 */
+let mediaWired = false
+
 /** 用户选的是 Light / Dark / system 三选一。 */
 export const themeMode = computed(() => settings.themeMode)
 
@@ -39,9 +42,25 @@ async function persist() {
   return storage.write(storageKeys.settings, { ...settings })
 }
 
-/** 应用启动时调一次。 */
+/**
+ * 从**当前生效的适配器**读一次设置并应用。
+ *
+ * 调用点有三个：应用启动、登录切云端、退出切回本地。
+ *
+ * ⚠️ 因此它必须是**幂等且可重复调用**的，有两处要注意：
+ *
+ * 1. **读到之后先把内存清回默认值，再盖上有值的那几个键。**
+ *    只做「有则覆盖」是不够的 —— 本机没有 `jt:settings` 时（刚退出登录、
+ *    或者从没用过本机模式）那个循环一个键都不碰，内存里就**留着上一个账号的
+ *    云端设置**：主题色、编辑模式全带过来，换个人登录会看到别人的界面。
+ *    先 `read` 再清空，是为了让「读失败」不至于把现有设置冲掉。
+ * 2. **`matchMedia` 的监听只能挂一次** —— 它绑的是模块级的 `settings` 对象，
+ *    重复挂等于同一个变更触发 N 次回调，而且永远摘不掉。
+ */
 export async function initSettings() {
   const saved = await storage.read(storageKeys.settings)
+
+  for (const [k, v] of Object.entries(defaultSettings)) settings[k] = v
   if (saved && typeof saved === 'object') {
     for (const [k, v] of Object.entries(saved)) {
       if (k in defaultSettings) settings[k] = v
@@ -50,11 +69,14 @@ export async function initSettings() {
   applyThemeAttr()
   applyAccentAttr()
 
-  // 跟随系统时，系统切换要实时响应
-  const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
-  mq?.addEventListener?.('change', () => {
-    if (settings.themeMode === 'system') applyThemeAttr()
-  })
+  if (!mediaWired) {
+    mediaWired = true
+    // 跟随系统时，系统切换要实时响应
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    mq?.addEventListener?.('change', () => {
+      if (settings.themeMode === 'system') applyThemeAttr()
+    })
+  }
 }
 
 /** 改一个或多个设置项。 */

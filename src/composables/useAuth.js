@@ -264,6 +264,9 @@ export async function logout() {
    * 退出后也要把设置**换回本机那一份**。
    * 登录期间内存里的 settings 是云端的；不重读的话退出后还带着上一个账号的
    * 主题 / 编辑模式 —— 换个人登录会看到别人的界面。
+   *
+   * `initSettings()` 会**先清回默认值再盖本机存的那份**，所以本机从来没存过
+   * `jt:settings` 时也能正确回落，不会留着云端那几个值。
    * （与 enterCloudMode 里那次是同一个道理，方向相反。）
    */
   await initSettings()
