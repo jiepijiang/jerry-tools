@@ -671,7 +671,12 @@ const SEED_ADDITIONS = {
          线上库那份改不动（要 `service_role`），而且用户自己粘的地址也没人管。
       ⚠️ 清完**重跑 `supabase/seed-discover.mjs`** 才会同步到库里
       （**现在重跑不会覆盖 views/collects**，安全）；老库也可以手工
-      `update discover_sites set icon = '' where …`。
+      `update discover_sites set icon = '' where …`（SQL 见 `supabase/README.md`）。
+      **当前线上库还没清** —— 直查实测（2026-09-24）仍是 37 条
+      （31 duckduckgo + 5 google s2 + 1 明文 http），因为改它要 `service_role`，
+      那个 key 暂时拿不到。**渲染层那层过滤已经兜住了**（`cloud-icons-ui.mjs`
+      登录后实测：发现页 377 张图坏地址 0 张、图标管理页如实报「已忽略 37」），
+      所以不急 —— 但哪天有 `service_role` 了，顺手清一下更干净。
       ⚠️ 本地模式的老用户看不到 —— `seedIfEmpty` 只在存储为空时灌种子，
       要么升 `SEED_VERSION` 走 `SEED_ADDITIONS`，要么让他们重登一次从云端拉。
       （另有 3 条 `mail.google.com` / `drive.google.com` / `ai.google.dev` 的
