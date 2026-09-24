@@ -19,6 +19,7 @@
 
 import { supabase, currentUserId } from '@/data/supabase'
 import { storageKeys } from '@/data/options'
+import { normalizeSnapshot } from '@/data/transfer'
 
 /* ------------------------------------------------------------ 字段名转换 */
 
@@ -576,10 +577,24 @@ export const supabaseAdapter = {
     return out
   },
 
-  /** 恢复：逐表覆盖写。 */
+  /**
+   * 恢复：逐表覆盖写。
+   *
+   * ⚠️ 与 localStorage 那份对齐两点：
+   *   1. 键名归一化 —— 设置面板「导出」产出的是 `{categories, bookmarks}`
+   *      （没有 `jt:` 前缀），不归一化的话这里会**一条都认不出**、
+   *      静默什么都不做（用户看到「恢复成功」但数据没变）。
+   *   2. 一个键都认不出就返回 false，不假装成功。
+   *
+   * 只遍历快照里出现的键，所以没写进备份的表**不会被清空**。
+   * 注意 `write()` 本身是「整表 diff」语义 —— 快照里写了的表会被
+   * 覆盖成快照里那份，这是「恢复」应有的行为。
+   */
   async writeAll(snap) {
+    const clean = normalizeSnapshot(snap)
+    if (!clean) return false
     let ok = true
-    for (const [key, value] of Object.entries(snap || {})) {
+    for (const [key, value] of Object.entries(clean)) {
       if (!SPECS[key]) continue
       const r = await this.write(key, value)
       if (!r) ok = false

@@ -11,7 +11,7 @@ import { storage, isCloudActive } from '@/data/storage'
 import { storageKeys } from '@/data/options'
 import { seedBookmarks, seedCategories } from '@/data/seed'
 import { seedSites } from '@/data/seed-discover'
-import { buildTree, clone, flattenTree, formatDate, normalizeUrl, uid } from '@/utils/helpers'
+import { buildTree, bookmarkKey, clone, flattenTree, formatDate, normalizeUrl, uid } from '@/utils/helpers'
 
 export const state = reactive({
   ready: false,
@@ -385,11 +385,6 @@ export async function updateBookmark(id, patch) {
   if (patch.url) next.url = normalizeUrl(patch.url)
   state.bookmarks[idx] = next
   return withRollback(() => {}, () => { state.bookmarks = prev }, storageKeys.bookmarks, state.bookmarks)
-}
-
-/** URL 的归一化比较键 —— 去尾斜杠 + 小写，与 isDuplicateUrl 同一口径。 */
-function bookmarkKey(url) {
-  return normalizeUrl(url).replace(/\/$/, '').toLowerCase()
 }
 
 /**

@@ -82,6 +82,18 @@ export function faviconOf(url, custom) {
   }
 }
 
+/**
+ * URL 的归一化比较键 —— 补协议 + 去尾斜杠 + 小写。
+ *
+ * 用来判断「两条书签是不是同一个站点」。**全项目只此一处**：
+ * 导入去重（useStore.upsertBookmarks）、编辑校验（isDuplicateUrl）、
+ * 本机→云端合并（data/transfer.js）都走它。
+ * 分开写的话，某一边松一点就会出现「导入时说重复、合并时说不重复」这种鬼故事。
+ */
+export function bookmarkKey(url) {
+  return normalizeUrl(url).replace(/\/$/, '').toLowerCase()
+}
+
 /** 数组按 key 分组。 */
 export function groupBy(list, key) {
   return list.reduce((acc, item) => {

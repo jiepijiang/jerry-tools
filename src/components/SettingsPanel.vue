@@ -13,6 +13,7 @@ import { resetSettings, setSetting, settings } from '@/composables/useSettings'
 import { geo, refreshWeather, setWeatherCity, useMyLocation, weather } from '@/composables/useClock'
 import { useI18n } from '@/composables/useI18n'
 import { state, updateShare } from '@/composables/useStore'
+import { isLoggedIn, pushLocalToCloud } from '@/composables/useAuth'
 import { exportSnapshot, storage } from '@/data/storage'
 import { storageKeys } from '@/data/options'
 import { copyText, download, formatDate } from '@/utils/helpers'
@@ -41,6 +42,7 @@ const confirmState = ref({ open: false, title: '', text: '', action: null })
 const shareSlug = ref(state.share.slug)
 const weatherCityInput = ref(settings.weatherCity)
 const fileInput = ref(null)
+const cloudUploading = ref(false)
 
 watch(
   () => props.modelValue,
@@ -125,6 +127,15 @@ async function doSaveCity() {
 
 /* ---------------------------------------------------------------- 数据 */
 
+/**
+ * 导出「分类 + 书签」。
+ *
+ * 键名刻意写成不带前缀的 `categories` / `bookmarks` —— 这份文件是给人看、
+ * 也是给别的工具吃的，`jt:categories` 这种内部键名没必要暴露。
+ *
+ * ⚠️ 正因为这样，恢复时必须靠 `normalizeSnapshot()` 把键名归一化回去。
+ *    以前没有那一步，导出的文件恢复不了 —— 本地模式下还会先清空再什么都不写。
+ */
 async function doExport() {
   const payload = {
     categories: state.categories,
@@ -132,6 +143,44 @@ async function doExport() {
   }
   download(`jerry-tools-bookmarks-${formatDate()}.json`, JSON.stringify(payload, null, 2))
   toast(t('toast.exportOk'))
+}
+
+/**
+ * 把本机（localStorage）的书签并到当前账号的云端。
+ *
+ * 为什么需要这个按钮：登录时的自动迁移只在**云端为空**时跑。
+ * 如果用户先登录过（云端已有数据）、之后又在未登录状态下导入了一份书签，
+ * 自动迁移不会触发，那份导入就永远留在本机。
+ */
+async function doUploadLocal() {
+  ask(t('settings.uploadLocal'), t('settings.uploadLocalConfirm'), async () => {
+    cloudUploading.value = true
+    try {
+      const res = await pushLocalToCloud()
+      if (res.ok) {
+        toast(
+          t('toast.uploadLocalOk', {
+            b: res.plan.bookmarks.added,
+            c: res.plan.categories.added,
+            s: res.plan.bookmarks.skipped,
+          }),
+        )
+        // 合并后 state 变了，等一拍让 toast 先画出来再刷新
+        setTimeout(() => location.reload(), 900)
+        return
+      }
+      // 失败原因逐条说清楚，别只丢一个「失败」
+      const key =
+        res.error === 'not_logged_in'
+          ? 'toast.uploadLocalNeedLogin'
+          : res.error === 'no_cloud'
+            ? 'toast.uploadLocalNoCloud'
+            : 'toast.uploadLocalNothing'
+      toast(t(key), 'warning')
+    } finally {
+      cloudUploading.value = false
+    }
+  })
 }
 
 async function doBackup() {
@@ -153,7 +202,13 @@ async function onRestoreFile(e) {
     const parsed = JSON.parse(text)
     const snap = parsed.data ?? parsed
     ask(t('settings.restore'), t('settings.restoreConfirm'), async () => {
-      await storage.writeAll(snap)
+      // writeAll 返回 false = 这份快照里一个认识的键都没有。
+      // 必须报失败 —— 以前它无论如何都返回 true，用户会以为恢复成功了。
+      const ok = await storage.writeAll(snap)
+      if (!ok) {
+        toast(t('toast.restoreFail'), 'error')
+        return
+      }
       toast(t('toast.restoreOk'))
       setTimeout(() => location.reload(), 500)
     })
@@ -566,7 +621,12 @@ async function copyShare() {
               <button class="btn-ghost" @click="pickRestore">
                 <AppIcon name="RotateCcw" :size="15" />{{ t('settings.restore') }}
               </button>
+              <!-- 只在登录态显示：没登录时「上传到云端」没有意义 -->
+              <button v-if="isLoggedIn" class="btn-ghost" :disabled="cloudUploading" @click="doUploadLocal">
+                <AppIcon name="Upload" :size="15" />{{ t('settings.uploadLocal') }}
+              </button>
             </div>
+            <p v-if="isLoggedIn" class="group-hint">{{ t('settings.uploadLocalHint') }}</p>
           </div>
 
           <div class="group">
@@ -669,6 +729,14 @@ async function copyShare() {
   font-size: 12px;
   font-weight: 500;
   margin-bottom: 9px;
+}
+
+/* 按钮组下面的一行小字说明 */
+.group-hint {
+  color: var(--muted_text_color);
+  font-size: 11.5px;
+  line-height: 1.55;
+  margin: 9px 0 0;
 }
 
 .opt-row {

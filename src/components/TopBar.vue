@@ -18,7 +18,14 @@ import { realtimeStatus } from '@/composables/useRealtime'
 import { state } from '@/composables/useStore'
 import { hostOf } from '@/utils/helpers'
 
-const emit = defineEmits(['openSettings', 'openSearch'])
+/**
+ * ⚠️ `logout` 必须列进来。模板里是 `$emit('logout')` 直接发的，
+ *    漏声明时 Vue 会在控制台报
+ *    「Component emitted event "logout" but it is neither declared in the emits
+ *    option nor as an "onLogout" prop」—— 功能照常，但控制台不干净，
+ *    会让真正的报错淹没在噪声里。
+ */
+const emit = defineEmits(['openSettings', 'openSearch', 'logout'])
 
 const router = useRouter()
 const { t } = useI18n()

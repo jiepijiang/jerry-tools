@@ -437,3 +437,56 @@ select s.id, s.title, s.collects,
 ```bash
 node --import ./register.mjs unit-cloud.mjs   # 【C】组 14 条断言
 ```
+
+---
+
+## 九、本机数据怎么进云端
+
+书签存在哪儿取决于**导入那一刻有没有登录**：未登录 → 只在本机 `localStorage`；
+已登录 → 直接写云端，没有额外步骤。所以「之前导入的书签怎么同步上去」有两种情况。
+
+**自动（云端还是空的）** —— 登录 / 注册 / 恢复会话都走 `enterCloudMode()`，
+它在切完适配器之后、`reloadStore()` 之前调 `transferLocalToCloud('fill')`：
+
+- 判断「云端是否为空」**必须直接查云端**，不能看 `state` —— 那一刻 `state`
+  要么还是空的，要么装的是本机那份，拿它当「云端非空」是循环论证；
+- 云端已有数据就**整体跳过**，一条都不动；
+- **顺序不能换**：必须在第一次 `reloadStore()` 之前。反过来的话
+  `reloadStore` 里的 `seedIfEmpty` 会先往空云端灌一套种子，迁移就判定
+  「云端非空」跳过了 —— 用户自己的书签永远上不去。
+
+**手动（云端已有数据）** —— 设置面板「数据备份」→ **上传本机数据**
+（仅登录后可见），走 `pushLocalToCloud()` → `transferLocalToCloud('merge')`。
+覆盖的正是自动迁移管不着的这条路径：
+
+> 先登录过 → 退出 → 未登录状态下导入了一份书签 → 再登录 → 自动迁移跳过。
+
+合并规则：**并集，只补不删**。书签按 URL 去重（`helpers.bookmarkKey`，
+与导入去重同一口径），分类按 id 去重、冲突时保留云端那份。幂等。
+
+**搬哪些表**：只有 `categories` / `bookmarks` / `notes`（`data/transfer.js`
+的 `TRANSFER_KEYS`）。刻意不含 `sites`（全局表，已由 `seed-discover.mjs` 灌过）、
+`favorites` / `visits`（本机那份属于未登录时的匿名行为，搬到云端等于算到账号头上）、
+`users`（云端是 `profiles`，本机那份是 `u_admin` 这种假 id）。
+
+### ⚠️ `writeAll` 的键名归一化
+
+「导出书签」产出的 JSON 是 `{ categories, bookmarks }` —— **没有 `jt:` 前缀**。
+而两个适配器的 `writeAll` 按 `storageKeys`（`jt:categories`）匹配，
+所以「导出 → 恢复」原来**是坏的**：本地模式下先清空所有业务键再写，
+一个都匹配不上 → **清空 + 什么都不写**（点一次丢一次数据）；
+云端模式下静默什么都不做，还提示「恢复完成」。
+
+现在统一过 `normalizeSnapshot()`（`src/data/transfer.js`）：
+键名归一化、**只动快照里出现的键**、一个键都认不出就返回 `false` 且不动数据。
+新增这类「外部文件 → 内部存储」的路径时，务必走这个函数。
+
+### 验证
+
+```bash
+# 纯逻辑（键名归一化 / 合并 / 幂等），不需要网络
+node --import ./register.mjs transfer-verify.mjs      # 32 条
+
+# 浏览器端（先起 dev server 5174）：自动迁移 + 手动上传 + 导出恢复
+node transfer-ui.mjs                                  # 28 条
+```

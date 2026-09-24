@@ -20,6 +20,7 @@ import { initSettings } from '@/composables/useSettings'
 import { supabase, supabaseConfigured } from '@/data/supabase'
 import { useCloudStorage, useLocalStorage, localStorageAdapter, isCloudActive, storage } from '@/data/storage'
 import { storageKeys } from '@/data/options'
+import { planTransfer } from '@/data/transfer'
 import { uid } from '@/utils/helpers'
 
 /** 管理后台的口令闸（本地写死）。云端模式下这只是个「你确定吗」的二次确认， */
@@ -87,37 +88,99 @@ async function loadCloudProfile(userId) {
   }
 }
 
+/* --------------------------------------------------- 本机 ↔ 云端的数据搬运 */
+
+/** 读本机（localStorage）那三张业务表。 */
+async function readLocalBusinessData() {
+  const read = async (k) => (await localStorageAdapter.read(k)) || []
+  const [categories, bookmarks, notes] = await Promise.all([
+    read(storageKeys.categories),
+    read(storageKeys.bookmarks),
+    read(storageKeys.notes),
+  ])
+  return { categories, bookmarks, notes }
+}
+
+/** 读云端那三张业务表（此时 storage 已经是云端适配器）。 */
+async function readCloudBusinessData() {
+  const read = async (k) => (await storage.read(k)) || []
+  const [categories, bookmarks, notes] = await Promise.all([
+    read(storageKeys.categories),
+    read(storageKeys.bookmarks),
+    read(storageKeys.notes),
+  ])
+  return { categories, bookmarks, notes }
+}
+
 /**
- * 首次登录时把本机数据搬上云端。
+ * 把本机数据搬到当前账号的云端。
+ *
+ * `mode`：
+ *   `'fill'`  —— 云端**有任何数据就整体跳过**（首次登录走这个）。
+ *                多设备场景下自动覆盖是灾难，所以自动路径宁可保守。
+ *   `'merge'` —— 并集：云端已有的保留，本机独有的补上（用户手动点上传）。
  *
  * ⚠️ 判断「云端是否已有数据」必须**直接查云端**，不能看 `state`：
- *    1. 这个函数跑在 initStore 之前，state 此刻还是空的；
- *    2. 就算 state 有内容，那也是**本机**那份，拿它当"云端非空"是循环论证。
+ *    1. 自动迁移跑在 initStore 之前，state 此刻还是空的；
+ *    2. 就算 state 有内容，那也是**本机**那份，拿它当「云端非空」是循环论证。
  *
- * ⚠️ 而且**必须在第一次 reloadStore 之前调**。反过来的话，
+ * ⚠️ 而且自动迁移**必须在第一次 reloadStore 之前调**。反过来的话，
  *    reloadStore 里的 seedIfEmpty 会先往空云端灌一套种子，
- *    之后这里就判定"云端非空"、直接跳过 ——
+ *    之后这里就判定「云端非空」、直接跳过 ——
  *    用户自己的书签永远上不去，看到的是默认种子。
  *
- * 只在云端为空时执行；云端已有数据时**绝不覆盖**（多设备场景下那是灾难）。
+ * ⚠️ 本机的 `jt:*` 键搬完之后**不删**：一是删了就没法再搬第二遍，
+ *    二是退出登录后还要落回本机那份。
+ */
+export async function transferLocalToCloud(mode = 'fill') {
+  const local = await readLocalBusinessData()
+  if (!local.categories.length && !local.bookmarks.length && !local.notes.length) {
+    return { changed: false, reason: 'no_local' }
+  }
+
+  const cloud = await readCloudBusinessData()
+  if (mode === 'fill' && (cloud.categories.length || cloud.bookmarks.length)) {
+    return { changed: false, reason: 'cloud_not_empty' }
+  }
+
+  const plan = planTransfer(cloud, local)
+  if (!plan.changed) return { changed: false, reason: 'nothing_new', plan }
+
+  // 逐表写。`storage.write` 在云端是「整表 diff」语义，
+  // 传进去的数组就是这张表的目标状态 —— 所以必须传合并后的 rows。
+  if (plan.categories.changed) await storage.write(storageKeys.categories, plan.categories.rows)
+  if (plan.bookmarks.changed) await storage.write(storageKeys.bookmarks, plan.bookmarks.rows)
+  if (plan.notes.changed) await storage.write(storageKeys.notes, plan.notes.rows)
+
+  return { changed: true, plan }
+}
+
+/**
+ * 手动把本机数据上传到云端（设置面板「上传本机数据」按钮）。
+ *
+ * 与首次登录那次自动迁移的区别：**云端已经有数据也会跑**，走并集。
+ * 存在的理由：自动迁移只在云端为空时触发，而用户完全可能
+ * 「先登录过（云端被灌了种子）→ 之后在未登录状态下导入了一份书签」，
+ * 这时自动迁移不会跑，那份导入就永远留在本机。
+ */
+export async function pushLocalToCloud() {
+  if (!supabaseConfigured) return { ok: false, error: 'no_cloud' }
+  if (!isCloudActive()) return { ok: false, error: 'not_logged_in' }
+
+  const res = await transferLocalToCloud('merge')
+  if (!res.changed) return { ok: false, error: res.reason, plan: res.plan }
+
+  // state 里还是合并前那份，重读一次才看得见新书签
+  await reloadStore()
+  return { ok: true, plan: res.plan }
+}
+
+/**
+ * 首次登录时把本机数据搬上云端（自动路径，等价于 `transferLocalToCloud('fill')`）。
+ * 云端已有数据时**绝不覆盖**。
  */
 async function migrateLocalToCloud() {
-  const cloudCats = await storage.read(storageKeys.categories)
-  if ((cloudCats?.length || 0) > 0) return { migrated: false }
-  const cloudBms = await storage.read(storageKeys.bookmarks)
-  if ((cloudBms?.length || 0) > 0) return { migrated: false }
-
-  // 本机那份从 localStorageAdapter 直接读 —— 此时适配器已经切到云端了
-  const localCats = await localStorageAdapter.read(storageKeys.categories)
-  const localBms = await localStorageAdapter.read(storageKeys.bookmarks)
-  const localNotes = await localStorageAdapter.read(storageKeys.notes)
-  const hasLocal = (localCats?.length || 0) > 0 || (localBms?.length || 0) > 0
-  if (!hasLocal) return { migrated: false }
-
-  if (localCats?.length) await storage.write(storageKeys.categories, localCats)
-  if (localBms?.length) await storage.write(storageKeys.bookmarks, localBms)
-  if (localNotes?.length) await storage.write(storageKeys.notes, localNotes)
-  return { migrated: true, categories: localCats?.length || 0, bookmarks: localBms?.length || 0 }
+  return transferLocalToCloud('fill')
 }
 
 /**
