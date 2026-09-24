@@ -76,7 +76,7 @@ const filteredSites = computed(() => {
 
 const iconSites = computed(() => {
   const k = iconQuery.value.trim().toLowerCase()
-  const list = state.sites.filter((s) => s.icon || faviconOf(s.url))
+  const list = state.sites.filter((s) => faviconOf(s.url, s.icon))
   if (!k) return list.slice(0, 120)
   return list.filter(
     (s) => s.title?.toLowerCase().includes(k) || s.url?.toLowerCase().includes(k),
@@ -303,7 +303,7 @@ async function sendReply() {
           <h3><AppIcon name="Clock" :size="15" />{{ t('admin.pendingCount') }} · {{ pendingSites.length }}</h3>
           <div class="row-list">
             <div v-for="s in pendingSites" :key="s.id" class="row glass">
-              <BookmarkIcon :src="s.icon || faviconOf(s.url)" :name="s.title" :hash-key="s.url" :size="30" :radius="7" />
+              <BookmarkIcon :src="faviconOf(s.url, s.icon)" :name="s.title" :hash-key="s.url" :size="30" :radius="7" />
               <div class="row-text">
                 <strong>{{ s.title }}</strong>
                 <span>{{ s.category }}<template v-if="s.subcategory"> · {{ s.subcategory }}</template> · {{ s.url }}</span>
@@ -316,7 +316,7 @@ async function sendReply() {
 
         <div class="row-list">
           <div v-for="s in filteredSites" :key="s.id" class="row glass">
-            <BookmarkIcon :src="s.icon || faviconOf(s.url)" :name="s.title" :hash-key="s.url" :size="30" :radius="7" />
+            <BookmarkIcon :src="faviconOf(s.url, s.icon)" :name="s.title" :hash-key="s.url" :size="30" :radius="7" />
             <div class="row-text">
               <strong>{{ s.title }}</strong>
               <span>{{ hostOf(s.url) }} · {{ s.category }} · {{ s.views || 0 }} {{ t('discover.views') }}</span>
@@ -376,7 +376,7 @@ async function sendReply() {
         </div>
         <div class="icon-grid">
           <div v-for="s in iconSites" :key="s.id" class="icon-card glass">
-            <BookmarkIcon :src="s.icon || faviconOf(s.url)" :name="s.title" :hash-key="s.url" :size="34" :radius="8" />
+            <BookmarkIcon :src="faviconOf(s.url, s.icon)" :name="s.title" :hash-key="s.url" :size="34" :radius="8" />
             <div class="ic-text">
               <strong>{{ s.title }}</strong>
               <span>{{ hostOf(s.url) }}</span>

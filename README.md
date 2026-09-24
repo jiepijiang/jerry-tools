@@ -525,6 +525,70 @@ const SEED_ADDITIONS = {
 
 ---
 
+## 图标从哪来
+
+书签 / 站点图标有**三层**，按顺序落：
+
+| 层 | 来源 | 什么时候用 |
+| --- | --- | --- |
+| 1 | 数据里的 `icon` 字段 | 用户自己粘的地址、上传的图片（转 dataURL） |
+| 2 | `https://<origin>/favicon.ico` | 第 1 层没有、或**第 1 层不合格被挡下** |
+| 3 | 渐变底 + 首字母 | 第 2 层也加载失败（`BookmarkIcon` 的 `@error`） |
+
+**入口只有一个**：`utils/helpers.js` 的 `faviconOf(url, custom)`。
+
+### 为什么要有「不合格」这一说
+
+`icon` 是用户可填的字段，填进来的东西不能直接丢给 `<img>`：
+
+- **第三方 favicon 服务**（`icons.duckduckgo.com`、`icon.horse`、`t0-t3.gstatic.com`、
+  `google.com/s2/favicons` …）—— 国内不可达，批量请求会被限流，一挂挂一整页。
+  这个项目从一开始就定的策略是**一个都不用**，走站点自己的 `/favicon.ico`。
+- **明文 `http://`** —— HTTPS 页面上是 Mixed Content，控制台留警告，图片还可能被浏览器直接拦掉。
+
+`isUsableIcon()` 判这两类，`isThirdPartyIcon()` 只判第一类（管理页要分开报）。
+
+⚠️ **`www.gstatic.com` 不在黑名单里** —— 那是 Google 自家站点的静态资源
+（AI Studio / Firebase / TensorFlow 的图标都从那儿发），是「站点自己的 CDN」。
+同理 `cdn.prod.website-files.com`（Webflow 托管）、`images.squarespace-cdn.com`、
+`img.alicdn.com` 也都是站点自己在用的，不能整域名拉黑。
+真正的 favicon 服务是 `t0-t3.gstatic.com/faviconV2`，以及 `google.com/s2/favicons`
+这种 **host 太宽、得按路径判**的（`isThirdPartyIcon` 里为此单列了一张
+`THIRD_PARTY_ICON_PATHS` 表）。
+
+### 三个容易踩的地方
+
+1. **调用点必须写 `faviconOf(url, icon)`，不能写 `icon || faviconOf(url)`。**
+   后者在 `icon` 非空时直接把整个函数绕过去了 —— 兜底逻辑一行都不执行，
+   上面那套过滤等于白写。这个项目里 12 个渲染点全部统一成前者。
+2. **数据问题要报出来，不能藏。** 图标管理页单列一个「已忽略 N」的 chip，
+   而不是从「自定义 N」里扣掉 —— 扣掉的话管理员看到「自定义 0」，
+   根本不知道库里躺着几十条用不了的地址。颜色走 `--warning` / `--warning_text`，
+   深色主题自动切。
+3. **协议相对地址 `//host/x` 不算站内路径。** `isUsableIcon` 里判站内用的是
+   `s.startsWith('/') && !s.startsWith('//')` —— 少了后半句，外链会被当成相对路径放行。
+
+种子数据里那 37 条不合格的 `icon` 也一并清掉了（见「待办」里那条），
+但**渲染层这层过滤才是保险**：线上库那份改不动（要 `service_role`），
+用户自己粘的地址更没人管。
+
+回归脚本（都在 `/tmp`，不入仓库，跟 `transfer-*.mjs` 一套）：
+
+| 脚本 | 覆盖 | 断言数 |
+| --- | --- | --- |
+| `icon-policy.mjs` | 纯函数：`isThirdPartyIcon` / `isUsableIcon` / 种子数据不变量 | 34 |
+| `icon-ui.mjs` | 浏览器端：12 个渲染点实际给 `<img>` 选了哪个 src | 15 |
+| `i18n-parity.mjs` | 中英键位双向一致 + 占位符一致 + 没有空文案 | 19 |
+
+⚠️ `icon-ui.mjs` 有个**必须知道的写法**：不能在事后 `querySelectorAll('img')` 查。
+`faviconOf` 给出的 `/favicon.ico` 一旦加载失败，`BookmarkIcon` 的 `@error` 会把
+`<img>` 摘掉换成首字母 —— 事后查 DOM 只能看到「兜底后的世界」，
+第 2 层的证据已经被抹掉了（当时表现为 4 条断言全 `null`，看着像 bug）。
+正解是 `addInitScript` 里装 `MutationObserver`，把**每一个**进过 DOM 的
+`<img src>` 记下来。副作用还挺好：整条链路不用碰网络，也不用 `page.route` 打桩。
+
+---
+
 ## 收藏数是怎么算的
 
 `discover_sites.collects` 是**服务端维护**的列，客户端只读不写。
@@ -593,20 +657,25 @@ const SEED_ADDITIONS = {
 - [ ] 图标可选的「自动抓取」目前只回退到站点自己的 `/favicon.ico`，
       覆盖率约 57%。想要更高覆盖率需要自建一个抓取 `<link rel="icon">` 的代理服务
       （浏览器端受 CORS 限制做不了）
-- [ ] **种子数据里有 37 条 icon 不该这么写**（377 条里），实测分布：
+- [x] **种子数据里那 37 条 icon 已清掉**（377 条里）。当初实测分布：
       | 条数 | 写的是什么 | 问题 |
       | --- | --- | --- |
       | 31 | `https://icons.duckduckgo.com/ip3/<域名>.ico` | 第三方服务，国内不可达 |
       | 5 | `https://www.google.com/s2/favicons?domain=…` | **正是 `helpers.js` 注释里说「特意不用」的那个服务** |
       | 1 | `http://regex101.com/static/assets/icon-192.png` | **明文 http** → HTTPS 页面上报 Mixed Content 警告 |
-      表现：图标空着走首字母兜底；那条 http 的还会在线上控制台留警告。
-      修法：**直接删掉这些条目的 `icon` 字段** —— `faviconOf` 会自动回落到
-      `https://<origin>/favicon.ico`，既对齐策略又少一份要维护的数据。
-      改完重跑 `seed-discover.mjs`（**现在重跑不会覆盖 views/collects**，安全）；
-      已上线的库要么重跑种子，要么手工 `update discover_sites set icon = '' where …`。
+      做法是**两管齐下**（见「图标从哪来」）：
+      1. **数据侧**：`seed-discover.js` 里这 37 条的 `icon` 置空。只动 `icon` 字段 ——
+         `views` 合计 37701 / `collects` 合计 7764 / 条目数 377 都有断言兜着。
+      2. **渲染侧**：`faviconOf()` 里加 `isUsableIcon()` 过滤，**不合格的自定义图标
+         在渲染时直接回落到站点自己的 `/favicon.ico`**。这一层才是真正的保险 ——
+         线上库那份改不动（要 `service_role`），而且用户自己粘的地址也没人管。
+      ⚠️ 清完**重跑 `supabase/seed-discover.mjs`** 才会同步到库里
+      （**现在重跑不会覆盖 views/collects**，安全）；老库也可以手工
+      `update discover_sites set icon = '' where …`。
       ⚠️ 本地模式的老用户看不到 —— `seedIfEmpty` 只在存储为空时灌种子，
       要么升 `SEED_VERSION` 走 `SEED_ADDITIONS`，要么让他们重登一次从云端拉。
       （另有 3 条 `mail.google.com` / `drive.google.com` / `ai.google.dev` 的
-      icon 是站点自己的资源，正常，别一起删了。）
+      icon 是站点自己的资源，正常，**别一起删了** —— `icon-policy.mjs` 里专门
+      有 10 条「不该误伤」的反例断言守着，`www.gstatic.com` 也在其中。）
 - [ ] `.bm-desc` 改成允许两行（或把描述上限写进编辑器的字数校验）。
       现在只剩 0.5px 余量，任何补充说明都塞不进去，见上方「数据层与已知限制」末尾

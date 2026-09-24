@@ -210,7 +210,7 @@ async function doSubmit() {
         @click="openDetail(s)"
       >
         <div class="sc-top">
-          <BookmarkIcon :src="s.icon || faviconOf(s.url)" :name="s.title" :hash-key="s.url" :size="38" :radius="9" />
+          <BookmarkIcon :src="faviconOf(s.url, s.icon)" :name="s.title" :hash-key="s.url" :size="38" :radius="9" />
           <button class="fav-btn" :class="{ on: isFav(s) }" @click="onFav(s, $event)">
             <AppIcon name="Star" :size="15" />
           </button>
@@ -236,7 +236,7 @@ async function doSubmit() {
     <Modal :model-value="!!detail" size="md" @update:model-value="detail = null">
       <div v-if="detail" class="detail">
         <div class="dt-head">
-          <BookmarkIcon :src="detail.icon || faviconOf(detail.url)" :name="detail.title" :hash-key="detail.url" :size="52" :radius="13" />
+          <BookmarkIcon :src="faviconOf(detail.url, detail.icon)" :name="detail.title" :hash-key="detail.url" :size="52" :radius="13" />
           <div class="dt-meta">
             <h2>{{ detail.title }}</h2>
             <a :href="detail.url" target="_blank" rel="noopener noreferrer">{{ detail.url }}</a>

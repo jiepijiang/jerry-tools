@@ -66,14 +66,92 @@ export function normalizeUrl(url) {
 }
 
 /**
+ * 第三方 favicon 服务 —— 一律不用。
+ *
+ * 为什么不能图省事用它们：
+ *   1. **国内不可达**。`icons.duckduckgo.com` / `t*.gstatic.com` 都够呛，
+ *      一个不通就是**整页图标集体挂掉**，看着像站点坏了；
+ *   2. **批量请求会被限流**，表现是「刷新几次之后图标全白」；
+ *   3. **跟站点本身没关系**。站点换了图标这里不会跟着变，数据会慢慢腐烂。
+ *
+ * ⚠️ `www.gstatic.com` **不在**这个名单里 —— 那是 Google 自家站点的静态资源
+ *    （AI Studio / Firebase / TensorFlow 的图标都从那儿发），
+ *    是「站点自己的 CDN」而不是 favicon 服务。真正的服务是
+ *    `t0-t3.gstatic.com/faviconV2`。同理 `cdn.prod.website-files.com`
+ *    （Webflow 托管）也不算 —— 那是站点自己在用的。
+ */
+const THIRD_PARTY_ICON_HOSTS = new Set([
+  'icons.duckduckgo.com',
+  'icon.horse',
+  'api.faviconkit.com',
+  'favicon.im',
+  't0.gstatic.com',
+  't1.gstatic.com',
+  't2.gstatic.com',
+  't3.gstatic.com',
+])
+
+/** host 太宽、不能整域名拉黑的，按路径判断。 */
+const THIRD_PARTY_ICON_PATHS = [
+  { host: /^(www\.)?google\.com$/i, path: /^\/s2\/favicons\b/i },
+]
+
+/** 这个地址是不是「第三方 favicon 服务」。 */
+export function isThirdPartyIcon(src) {
+  let u
+  try {
+    u = new URL(String(src))
+  } catch {
+    return false
+  }
+  if (THIRD_PARTY_ICON_HOSTS.has(u.hostname.toLowerCase())) return true
+  return THIRD_PARTY_ICON_PATHS.some((r) => r.host.test(u.hostname) && r.path.test(u.pathname))
+}
+
+/**
+ * 这个**自定义**图标地址能不能真的拿来用。
+ *
+ * 允许：
+ *   - `data:image/…` —— 用户自己上传的（`BookmarkDialog` / 图标管理走 `readFileAsDataURL`）
+ *   - 站内相对路径（`/static/…`、`./…`）
+ *   - `https://` 且不是第三方 favicon 服务
+ *
+ * 拒绝：
+ *   - 明文 `http://` —— HTTPS 页面上会被浏览器直接拦掉（Mixed Content），
+ *     还会在控制台留一条警告。种子里那条 `http://regex101.com/…` 就是。
+ *   - 第三方 favicon 服务（理由见上）
+ *   - 空值 / 解析不出来的地址
+ */
+export function isUsableIcon(src) {
+  const s = String(src || '').trim()
+  if (!s) return false
+  if (/^data:image\//i.test(s)) return true
+  // 站内路径。⚠️ 排除 `//host/x`（协议相对地址）—— 那是外链，得走下面的 https 判断
+  if (s.startsWith('/') && !s.startsWith('//')) return true
+  if (s.startsWith('./') || s.startsWith('../')) return true
+  if (!/^https:\/\//i.test(s)) return false
+  return !isThirdPartyIcon(s)
+}
+
+/**
  * 站点图标地址。
- * 优先级：数据里写死的自定义图标 → 站点自己的 /favicon.ico → 由调用方渲染首字母兜底。
+ * 优先级：数据里写死的自定义图标 → 站点自己的 `/favicon.ico` → 由调用方渲染首字母兜底。
  *
  * 特意**不用** Google 的 s2 favicon 服务：它在国内不可达，会让整页图标集体挂掉，
  * 而且批量请求还会被限流。让每个站点自己提供图标，既没有第三方依赖也不会被限。
+ *
+ * ⚠️ `custom` 会被 `isUsableIcon()` 过一遍 —— 数据里躺着不合格的地址时
+ *    **在这里回落到站点自己的图标**，而不是把坏地址丢给 `<img>`。
+ *    这不是多余的：早期从参考站抄来的 377 条种子里就有 36 条指向
+ *    duckduckgo / google s2、1 条是明文 http。指望数据永远干净不现实，
+ *    而且线上库里那份改不动（要 service_role），只能在渲染这层挡住。
+ *
+ * ⚠️ 调用点要写成 `faviconOf(url, icon)`，**不要**写 `icon || faviconOf(url)` ——
+ *    后者把自定义图标整个绕过去了，这条兜底逻辑一行都不会执行。
  */
 export function faviconOf(url, custom) {
-  if (custom) return custom
+  const c = String(custom || '').trim()
+  if (isUsableIcon(c)) return c
   try {
     const host = new URL(normalizeUrl(url)).origin
     return `${host}/favicon.ico`

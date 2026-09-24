@@ -11,7 +11,7 @@ import Modal from '@/components/Modal.vue'
 import { createBookmark, flatCategories, isDuplicateUrl, updateBookmark } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
-import { faviconOf, isValidUrl, readFileAsDataURL } from '@/utils/helpers'
+import { faviconOf, isUsableIcon, isValidUrl, readFileAsDataURL } from '@/utils/helpers'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -36,11 +36,27 @@ const urlEl = ref(null)
 const isEdit = computed(() => !!props.bookmark)
 const title = computed(() => (isEdit.value ? t('bookmark.editTitle') : t('bookmark.addTitle')))
 
+/**
+ * 预览框里显示的那张图。
+ *
+ * ⚠️ 这里**故意**跟卡片不一样：`form.icon` 非空时直接原样显示，**不过滤**。
+ *    卡片那边 `faviconOf(url, icon)` 会把不合格的地址挡掉、回落到站点自己的
+ *    `/favicon.ico`；但编辑框是「我填了什么」的视图 —— 用户粘了个坏地址，
+ *    这里就该看见它加载失败，而不是看见一张**看起来正常的**站点图标，
+ *    那样他会以为填对了，保存后卡片上却换成另一张图。
+ *    真正的提醒交给下面的 `iconUnusable` 文案。
+ */
 const iconPreview = computed(() => {
   if (form.value.icon) return form.value.icon
-  if (form.value.url) return faviconOf(form.value.url)
+  if (form.value.url) return faviconOf(form.value.url, form.value.icon)
   return ''
 })
+
+/**
+ * 填了自定义图标，但地址不合格 —— 保存后**渲染时会被忽略**。
+ * 在这儿说出来，比让用户保存完对着卡片纳闷强。
+ */
+const iconUnusable = computed(() => !!form.value.icon && !isUsableIcon(form.value.icon))
 
 const categoryOptions = computed(() => flatCategories.value)
 
@@ -162,6 +178,9 @@ function useAutoIcon() {
         </button>
         <div class="icon-meta">
           <p class="icon-hint">{{ t('bookmark.iconPick') }}</p>
+          <p v-if="iconUnusable" class="icon-warn">
+            <AppIcon name="AlertCircle" :size="13" />{{ t('bookmark.iconUnusable') }}
+          </p>
           <button v-if="iconMode !== 'auto'" class="link-btn" @click="useAutoIcon">
             {{ t('bookmark.iconDefault') }}
           </button>
@@ -260,6 +279,18 @@ function useAutoIcon() {
 .icon-hint {
   color: var(--muted_text_color);
   font-size: 12px;
+}
+
+/* 「你填的这个地址会被忽略」。
+   用 --warning_text 而不是 --warning：这是 11.5px 正文，
+   亮橙压在玻璃面板上对比度只有 1.9:1，读不清。深色主题下两者等价。 */
+.icon-warn {
+  align-items: center;
+  color: var(--warning_text);
+  display: flex;
+  font-size: 11.5px;
+  gap: 4px;
+  margin-top: 5px;
 }
 
 .link-btn {

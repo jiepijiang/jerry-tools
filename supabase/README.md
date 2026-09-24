@@ -135,6 +135,33 @@ node supabase/seed-discover.mjs
 > （别改成 `PATCH` + 数组 body：PostgREST 的 PATCH 是「一个对象套给所有匹配行」，
 > 逐行不同值它做不到。）
 
+### 种子里 `icon` 改过之后，**必须重跑这个脚本**
+
+`seed-discover.mjs` 读的就是 `src/data/seed-discover.js`。那份数据里
+37 条不合格的 `icon`（第三方 favicon 服务 / 明文 http）已经清空，
+但**线上库不会自己变** —— 不重跑的话，已上线那 377 行还是老值。
+
+```
+清过 icon → 重跑 seed-discover.mjs → 库里的 icon 跟着变空
+```
+
+重跑是安全的：元数据 upsert 只包含 payload 里出现的列，
+`views` / `collects` 不受影响（见上面那条 ⚠️）。跑完对比一下打印的合计即可。
+
+不想重跑也可以手工清：
+
+```sql
+update discover_sites
+   set icon = ''
+ where icon ilike '%icons.duckduckgo.com%'
+    or icon ilike '%google.com/s2/favicons%'
+    or icon ilike 'http://%';
+```
+
+> 这只是「把数据弄干净」。**用户手里那份数据仍然可能带坏地址**
+> （自己粘的、从旧备份恢复的），所以前端 `faviconOf()` 里那层
+> `isUsableIcon()` 过滤才是真正的保险 —— 详见根 README「图标从哪来」。
+
 ---
 
 ## 四、验证

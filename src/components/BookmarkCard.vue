@@ -35,7 +35,7 @@ const emit = defineEmits(['open', 'edit', 'delete', 'dragstart'])
 
 const pressed = ref(false)
 
-const iconSrc = computed(() => props.bookmark.icon || faviconOf(props.bookmark.url))
+const iconSrc = computed(() => faviconOf(props.bookmark.url, props.bookmark.icon))
 
 /** 实际生效的排列密度。极简布局会强制压到 compact。 */
 const density = computed(() => (props.dense ? 'compact' : settings.density))

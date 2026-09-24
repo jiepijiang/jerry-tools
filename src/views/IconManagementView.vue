@@ -13,7 +13,7 @@ import BookmarkIcon from '@/components/BookmarkIcon.vue'
 import { state, updateSite } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
-import { faviconOf, hostOf, readFileAsDataURL } from '@/utils/helpers'
+import { faviconOf, hostOf, isUsableIcon, readFileAsDataURL } from '@/utils/helpers'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -32,10 +32,24 @@ const list = computed(() => {
   )
 })
 
+/**
+ * 数据里真的存了自定义图标的条数（**含**下面那种渲染时被忽略的）。
+ * 这是「库里的数据长什么样」，不是「页面上看到几张图」。
+ */
 const customCount = computed(() => state.sites.filter((s) => s.icon).length)
 
+/**
+ * 存了自定义图标、但**渲染时被忽略**的条数。
+ *
+ * 为什么单列一个而不是直接从 customCount 里扣掉：那样等于把数据问题藏起来 ——
+ * 管理员看到「自定义 0」根本不知道库里躺着几十条用不了的地址。
+ * 报出来他才知道要去修数据（种子里就有 36 条第三方 favicon + 1 条明文 http）。
+ */
+const ignoredCount = computed(() => state.sites.filter((s) => s.icon && !isUsableIcon(s.icon)).length)
+
+/** 用户看到的那张图。`faviconOf` 会把不合格的自定义图标回落到站点自己的 /favicon.ico。 */
 function iconOf(s) {
-  return s.icon || faviconOf(s.url)
+  return faviconOf(s.url, s.icon)
 }
 
 /* ------------------------------------------------------------ 上传本地图片 */
@@ -113,6 +127,9 @@ async function restore(site) {
       <div class="stats">
         <span class="chip">{{ t('iconMgmt.count', { n: state.sites.length }) }}</span>
         <span class="chip accent">{{ t('iconMgmt.custom') }} {{ customCount }}</span>
+        <span v-if="ignoredCount" class="chip warn" :title="t('iconMgmt.ignoredHint')">
+          {{ t('iconMgmt.ignored', { n: ignoredCount }) }}
+        </span>
       </div>
     </header>
 
@@ -242,6 +259,14 @@ async function restore(site) {
   background-color: var(--accent-soft);
   border-color: transparent;
   color: var(--accent-text);
+}
+
+/* 「有自定义图标但没生效」—— 提醒管理员数据需要修。
+   颜色走 --warning / --warning_text，深色主题会自动切，不用自己写两套。 */
+.chip.warn {
+  border-color: var(--warning);
+  color: var(--warning_text);
+  cursor: help;
 }
 
 .bar {

@@ -119,7 +119,7 @@ function blurSoon() {
       <Transition name="pop">
         <div v-if="focused && matches.length" class="match-pop glass">
           <button v-for="b in matches" :key="b.id" class="match-item" @mousedown.prevent="openBookmark(b)">
-            <img v-if="b.icon || faviconOf(b.url)" :src="b.icon || faviconOf(b.url)" alt="" class="match-icon" />
+            <img v-if="faviconOf(b.url, b.icon)" :src="faviconOf(b.url, b.icon)" alt="" class="match-icon" />
             <div class="match-text">
               <strong>{{ b.name }}</strong>
               <span>{{ b.description || b.url }}</span>
@@ -139,7 +139,7 @@ function blurSoon() {
         class="fav-chip"
         @click="openBookmark(b)"
       >
-        <img v-if="b.icon || faviconOf(b.url)" :src="b.icon || faviconOf(b.url)" alt="" />
+        <img v-if="faviconOf(b.url, b.icon)" :src="faviconOf(b.url, b.icon)" alt="" />
         <span v-else class="fav-dot" />
         {{ b.name }}
       </button>

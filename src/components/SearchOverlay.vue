@@ -46,7 +46,7 @@ const results = computed(() => {
       name: b.name,
       desc: b.description,
       url: b.url,
-      icon: b.icon || faviconOf(b.url),
+      icon: faviconOf(b.url, b.icon),
     }))
 
   const sites = state.sites
@@ -63,7 +63,7 @@ const results = computed(() => {
       name: s.title,
       desc: s.description,
       url: s.url,
-      icon: s.icon || faviconOf(s.url),
+      icon: faviconOf(s.url, s.icon),
     }))
 
   const list = [...bms, ...sites]
