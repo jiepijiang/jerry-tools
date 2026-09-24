@@ -12,10 +12,13 @@
 
 | 文件 | 作用 | 什么时候跑 |
 | --- | --- | --- |
-| `schema.sql` | **全量**建表脚本（11 表 / 5 函数 / 4 触发器 / 23 策略） | 新项目从零开始建 |
+| `schema.sql` | **全量**建表脚本（11 表 / 5 函数 / 4 触发器 / 23 策略 + realtime 发布） | 新项目从零开始建 |
 | `migrations/*.sql` | 增量修复 | 库已经建过，按编号顺序补 |
 | `seed-discover.mjs` | 灌发现页的 377 条种子 | 建完表之后跑一次 |
 | `verify-rls.mjs` | RLS 隔离性验证（45 条成对断言） | 改过任何策略 / 主键之后**必跑** |
+
+> `003-realtime.sql` 是**必须单独跑一次**的（老库）—— 详见「六、实时同步」。
+> 不跑的话功能不会报错，只会**静默失效**。
 
 ---
 
@@ -39,6 +42,7 @@
 ```bash
 node /path/to/run-sql.mjs supabase/migrations/001-composite-pk.sql
 node /path/to/run-sql.mjs supabase/migrations/002-share-slug-unique.sql
+node /path/to/run-sql.mjs supabase/migrations/003-realtime.sql
 ```
 
 每个迁移都是幂等的，重复跑安全。
@@ -191,7 +195,73 @@ create policy profiles_update on public.profiles
 
 ---
 
-## 六、已知限制
+## 六、实时同步（Realtime）
+
+登录后前端订阅自己那些表的变更，另一台设备改的东西**不用刷新**就会出现。
+代码在 `src/composables/useRealtime.js`，表清单在 `src/data/adapters/cloud.js`
+的 `REALTIME_TABLES`（与 `SPECS` 同源，表名只写一处）。
+
+### 必须先跑一次 `003-realtime.sql`
+
+**不跑不会报错，只会静默失效** —— 这是这个功能最坑的地方：
+
+| 现象 | 真相 |
+| --- | --- |
+| `subscribe()` 回调 `SUBSCRIBED` | **只说明 websocket 连上了**，与「表在不在发布里」无关 |
+| 一条事件都收不到 | 表不在 `supabase_realtime` 发布里 |
+| 服务端其实**有**报错 | 走 `system` 事件，**不**走 subscribe 回调 |
+
+实测：连一个**根本不存在的表名**订阅，`subscribe()` 也照样返回 `SUBSCRIBED`。
+所以「订阅成功」这个信号零区分度，唯一可靠的判据是**写一行 → 看有没有事件**。
+
+服务端的原话（前端已经把这条接住并显示成「服务端未开启实时同步」）：
+
+```
+Unable to subscribe to changes with given parameters.
+Please check Realtime is enabled for the given connect parameters:
+  [event: *, schema: public, table: bookmarks, ...]
+```
+
+### 两个不显眼的约束
+
+**① 过滤列必须在主键里。**
+`DELETE` 事件的 `old_record` 默认**只带主键列**（`replica identity default`）。
+过滤列不在主键里 → 服务端匹配不上 → **DELETE 被静默丢掉**。
+表现是「改了能同步、删了不同步」，很难往订阅配置上想。
+本项目选出的表主键里都含 `user_id`（`profiles` 是 `id`），所以前端统一用
+`user_id=eq.<uid>` / `id=eq.<uid>` 过滤是安全的。
+以后加新表务必先确认这一条，否则得 `alter table ... replica identity full`（WAL 会变胖）。
+
+**② RLS 的 SELECT 策略也要能只用主键列求值。**
+同上，DELETE 时服务端只有主键列可用。`discover_sites` 的策略引用了
+`status` / `submitted_by` 这些非主键列 —— 这是它**不适合订阅**的原因之一。
+
+### 为什么订阅里没有 `discover_sites`
+
+它是全局表，而 `views` 每次有人点开站点都会 +1。一旦订阅，
+**任何一个用户的每一次点击都会广播给所有在线设备** —— 377 条站点列表的流量和
+CPU 白烧，而用户看不出差别。所以发现页的浏览 / 收藏数不做实时，需要时刷新即可。
+
+### 断线重连要补一次全量读
+
+`postgres_changes` **没有回放**。断线期间的事件永远补不回来，
+所以 `useRealtime` 在**每次重连成功后**会做一次 `reloadStore()`
+（首次连接不做 —— 刚登录时数据本来就是新的）。
+后台标签页的 websocket 会被浏览器节流甚至掐断，切回前台时也会检查连接是否还在。
+
+### 验证
+
+```bash
+# 脚本化：两个真实账号，验「自己收到 / 别人收不到」（只需要 anon key）
+node /path/to/rt-verify.mjs
+
+# 端到端：两个独立浏览器 context = 两台设备，验「不刷新就同步」
+node /path/to/realtime-ui.mjs
+```
+
+---
+
+## 七、已知限制
 
 - **管理员不能在界面上创建 / 删除用户。** 创建 auth 用户需要 `service_role` key，
   那个 key 不能进浏览器。`adminCreateUser` 在云端模式直接返回 null 并打 `console.warn`；

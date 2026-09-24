@@ -91,4 +91,34 @@ export async function cycleThemeMode() {
 /** 当前是浅色还是深色（给按钮图标用）。 */
 export const isDark = computed(() => resolvedTheme.value === 'Dark')
 
+/* ------------------------------------------------------------ 云端设置 */
+
+/**
+ * 应用来自云端的设置（实时同步用）。
+ *
+ * ⚠️ **绝不能走 setSetting / setSettings** —— 那两个会 `persist()` 落盘，
+ *    落盘又触发一次云端写入，云端再推一次变更 → **无限回环**。
+ *    这里只改内存 + 刷 `<html>` 属性，一个字节都不往云端写。
+ *
+ * 返回「是否真的有变化」，供调用方判断要不要算作一次有效同步
+ * （没变化就说明是自己写下去的回声，忽略掉）。
+ */
+export function applyRemoteSettings(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+
+  let changed = false
+  for (const [k, v] of Object.entries(data)) {
+    if (!(k in defaultSettings)) continue
+    if (JSON.stringify(settings[k]) === JSON.stringify(v)) continue
+    settings[k] = v
+    changed = true
+  }
+
+  if (changed) {
+    applyThemeAttr()
+    applyAccentAttr()
+  }
+  return changed
+}
+
 export { applyThemeAttr, applyAccentAttr }

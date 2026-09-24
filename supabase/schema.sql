@@ -454,7 +454,56 @@ create policy feedback_delete on public.feedback
   for delete using (public.is_admin());
 
 
--- ============================================================ D. 收尾
+-- ============================================================ D. 实时同步
+
+-- 把私有表加进 Supabase 的 realtime 发布，供 postgres_changes 推送。
+--
+-- ⚠️ 新建的表**不会自动**进这个 publication。没加的话客户端订阅会返回
+--    `SUBSCRIBED`（那只是 websocket 连上了），然后**一条事件都收不到** ——
+--    静默失败，最难查。详见 migrations/003-realtime.sql 的完整说明。
+--
+-- ⚠️ 故意**不含 discover_sites**：它是全局表且 `views` 每次点击都变，
+--    订阅它等于把每个用户的每次点击广播给所有在线设备。
+--
+-- ⚠️ 过滤列必须在主键里，否则 DELETE 事件会被静默丢掉
+--    （DELETE 的 old_record 默认只带主键列）。本文件选出的表都满足。
+
+do $$
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    create publication supabase_realtime;
+  end if;
+end $$;
+
+do $$
+declare
+  t text;
+  targets text[] := array[
+    'categories', 'bookmarks', 'notes', 'visits', 'favorites',
+    'user_settings', 'share_settings', 'submissions', 'feedback', 'profiles'
+  ];
+begin
+  foreach t in array targets loop
+    if exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+    ) then
+      continue;
+    end if;
+    if not exists (
+      select 1 from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relname = t and c.relkind = 'r'
+    ) then
+      raise warning '表 public.% 不存在，跳过', t;
+      continue;
+    end if;
+    execute format('alter publication supabase_realtime add table public.%I', t);
+  end loop;
+end $$;
+
+
+-- ============================================================ E. 收尾
 
 -- 让 PostgREST 立刻感知新表，不用等 schema cache 自动刷新。
 notify pgrst, 'reload schema';

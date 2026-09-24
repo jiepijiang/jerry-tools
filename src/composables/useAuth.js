@@ -15,6 +15,7 @@
 
 import { computed } from 'vue'
 import { state, persistSession, persistUsers, reloadStore } from '@/composables/useStore'
+import { startRealtime, stopRealtime } from '@/composables/useRealtime'
 import { supabase, supabaseConfigured } from '@/data/supabase'
 import { useCloudStorage, useLocalStorage, localStorageAdapter, isCloudActive, storage } from '@/data/storage'
 import { storageKeys } from '@/data/options'
@@ -136,6 +137,11 @@ async function enterCloudMode(profile) {
   await reloadStore()
   // reloadStore 在云端模式不碰 session（那是 Auth 的事），保险起见再钉一次
   state.session = profile
+  /**
+   * 实时同步**放在最后**：订阅一旦建立就会往 state 里写东西，
+   * 得等数据先读完、快照建好，否则第一批事件会撞上「快照缺失」触发重读。
+   */
+  startRealtime(profile.id)
 }
 
 async function cloudRegister({ email, password, nickname }) {
@@ -230,6 +236,9 @@ export async function login(form) {
 
 /** 退出。切回本地存储并重载数据，避免退出后还看得见云端内容。 */
 export async function logout() {
+  // 先停订阅：不断开的话，退出后旧订阅仍会往 state 里写云端数据，
+  // 表现是「已经退出了，界面又被云端内容刷回来」
+  stopRealtime()
   if (supabaseConfigured && isCloudActive()) {
     await supabase.auth.signOut()
   }
@@ -355,14 +364,16 @@ export async function initAuth() {
 
   const { data } = await supabase.auth.getSession()
   if (data?.session?.user) {
-    useCloudStorage()
     const profile = await loadCloudProfile(data.session.user.id)
     if (profile && !profile.disabled) {
-      state.session = profile
-      // ⚠️ 迁移必须在第一次 reloadStore 之前 —— 见 migrateLocalToCloud 的注释
-      await migrateLocalToCloud()
-      await reloadStore()
-      state.session = profile
+      /**
+       * 走**和登录/注册同一条路**。
+       *
+       * 这里原来把 enterCloudMode 的步骤抄了一遍（切适配器 → 迁移 → 重载 → 钉 session）。
+       * 抄写的代价是每加一个步骤都要记得同步改两处 —— 漏一处就会出现
+       * 「登录进去能同步、刷新之后不能」这类只在某一条路径上复现的 bug。
+       */
+      await enterCloudMode(profile)
     } else if (profile?.disabled) {
       await supabase.auth.signOut()
     }
@@ -372,6 +383,7 @@ export async function initAuth() {
     // 只处理「会话没了」的情况。登录/退出都由上面的显式调用负责，
     // 在这里再处理一遍会和 reloadStore 抢执行顺序。
     if (event === 'SIGNED_OUT' && !session) {
+      stopRealtime()
       useLocalStorage()
       state.session = null
       await reloadStore()

@@ -13,7 +13,8 @@ import { useClock } from '@/composables/useClock'
 import { useI18n } from '@/composables/useI18n'
 import { cycleThemeMode, isDark, setSetting, settings } from '@/composables/useSettings'
 import { accentColors } from '@/data/themeColors'
-import { isLoggedIn } from '@/composables/useAuth'
+import { cloudAuthEnabled, isLoggedIn } from '@/composables/useAuth'
+import { realtimeStatus } from '@/composables/useRealtime'
 import { state } from '@/composables/useStore'
 import { hostOf } from '@/utils/helpers'
 
@@ -26,6 +27,43 @@ const { timeText, dateText, lunarText, todayBadge, weather, geo } = useClock()
 const accentOpen = ref(false)
 const userOpen = ref(false)
 const mobileMenu = ref(false)
+
+/**
+ * 实时同步状态指示。
+ *
+ * 只在**登录后**显示 —— 未登录时 `realtimeStatus.state` 是 `off`，
+ * 那是「数据只在本机」的正常状态，不是故障，不该给用户一个红点。
+ */
+const SYNC_LABEL_KEY = {
+  live: 'sync.live',
+  connecting: 'sync.connecting',
+  error: 'sync.error',
+  off: 'sync.off',
+}
+const syncState = computed(() => {
+  /**
+   * ⚠️ 「已登录 + state 还是 off」要显示成 `connecting`，不能显示 `off`。
+   *
+   * `startRealtime` 是在 reloadStore **之后**才调的（订阅前得先把数据和快照
+   * 读出来），而登录流程要跑好几秒。这段时间 state 一直是 `off`，
+   * 直接透传的话界面会显示「仅本机 · 未登录时数据只存在这台设备上」——
+   * 人明明刚登录成功，这句话是错的，用户会以为登录没生效。
+   *
+   * 判据要带 `cloudAuthEnabled`：纯本地模式下 `isLoggedIn` 也可能是 true，
+   * 那种情况确实就是「仅本机」，得如实显示。
+   */
+  if (cloudAuthEnabled && isLoggedIn.value && realtimeStatus.state === 'off') return 'connecting'
+  return realtimeStatus.state
+})
+const syncLabel = computed(() => t(SYNC_LABEL_KEY[syncState.value] || 'sync.off'))
+const syncHint = computed(() => {
+  if (syncState.value === 'live') return t('sync.hintLive')
+  // 「服务端没开实时同步」是个配置问题，和「网络断了」不是一回事，
+  // 提示里要分开说 —— 否则用户会一直刷新页面试图修好一个服务端配置
+  if (realtimeStatus.error === 'not_enabled') return t('sync.hintNotEnabled')
+  if (syncState.value === 'error') return t('sync.hintError')
+  return t('sync.hintOff')
+})
 
 const navItems = computed(() => {
   const items = [
@@ -210,11 +248,32 @@ function go(name) {
           <img v-if="state.session.avatar" :src="state.session.avatar" alt="" />
           <span v-else>{{ (state.session.nickname || 'J')[0].toUpperCase() }}</span>
         </button>
+        <!--
+          状态点挂在 .user-wrap 上而不是按钮里 —— `.avatar-btn` 有 overflow:hidden，
+          放里面会被裁掉（按钮是圆的，剪裁边界正好切在角上）。
+        -->
+        <i
+          v-if="isLoggedIn"
+          class="sync-dot"
+          :class="syncState"
+          :title="syncLabel"
+          :aria-label="syncLabel"
+        ></i>
         <Transition name="pop">
           <div v-if="userOpen && isLoggedIn" class="user-pop glass">
             <div class="user-head">
               <strong>{{ state.session.nickname }}</strong>
               <span>{{ state.session.email }}</span>
+            </div>
+            <div class="sync-row" :class="syncState">
+              <i class="sync-led" :class="syncState"></i>
+              <div class="sync-text">
+                <strong>{{ syncLabel }}</strong>
+                <span>{{ syncHint }}</span>
+                <span v-if="syncState === 'live' && realtimeStatus.applied > 0" class="sync-count">
+                  {{ t('sync.applied', { n: realtimeStatus.applied }) }}
+                </span>
+              </div>
             </div>
             <button class="pop-item" @click="go('login'); userOpen = false">
               <AppIcon name="User" :size="15" />{{ t('auth.profile') }}
@@ -541,6 +600,93 @@ button.info-card:hover {
 .user-head span {
   color: var(--muted_text_color);
   font-size: 11px;
+}
+
+/* ---------------------------------------------- 实时同步状态 */
+
+.sync-dot {
+  border: 2px solid var(--icon_tile_bg);
+  border-radius: 50%;
+  bottom: 0;
+  height: 10px;
+  position: absolute;
+  right: 0;
+  width: 10px;
+  z-index: 2;
+}
+
+.sync-dot.live {
+  background: var(--success);
+}
+
+.sync-dot.connecting {
+  animation: sync-pulse 1.2s ease-in-out infinite;
+  background: var(--warning);
+}
+
+.sync-dot.error {
+  background: var(--danger);
+}
+
+@keyframes sync-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.sync-row {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--border_color);
+  display: flex;
+  gap: 8px;
+  margin-bottom: 5px;
+  padding: 8px 10px 10px;
+}
+
+.sync-led {
+  border-radius: 50%;
+  flex: none;
+  height: 8px;
+  margin-top: 4px;
+  width: 8px;
+}
+
+.sync-led.live {
+  background: var(--success);
+}
+
+.sync-led.connecting {
+  animation: sync-pulse 1.2s ease-in-out infinite;
+  background: var(--warning);
+}
+
+.sync-led.error {
+  background: var(--danger);
+}
+
+.sync-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sync-text strong {
+  font-size: 12px;
+}
+
+.sync-text span {
+  color: var(--muted_text_color);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.sync-count {
+  opacity: 0.8;
 }
 
 .pop-item {

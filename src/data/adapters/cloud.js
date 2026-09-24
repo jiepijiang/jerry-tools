@@ -171,6 +171,26 @@ const SPECS = {
 /** 这些键只存在本机，不进云端。 */
 const LOCAL_ONLY = new Set([storageKeys.session, storageKeys.seedVersion])
 
+/**
+ * 要实时订阅的表。**与 SPECS 同源** —— 表名只在 SPECS 里写一次。
+ *
+ * 为什么没有 discover_sites：它是全局表，且 `views` 每次有人点开站点都会 +1。
+ * 订阅它等于把**每一个用户的每一次点击**广播给所有在线设备。
+ * 详见 supabase/migrations/003-realtime.sql。
+ *
+ * ⚠️ `filterColumn` 必须是**主键的一部分**。
+ *    DELETE 事件的 `old_record` 默认只带主键列，过滤列不在主键里的话
+ *    服务端匹配不上，DELETE 会被**静默丢掉** —— 表现是
+ *    「改了能同步，删了不同步」，特别难往订阅配置上想。
+ */
+export const REALTIME_TABLES = Object.keys(SPECS)
+  .filter((key) => key !== storageKeys.sites)
+  .map((key) => ({
+    key,
+    table: SPECS[key].table,
+    filterColumn: SPECS[key].noUserCol ? 'id' : 'user_id',
+  }))
+
 /* ------------------------------------------------------------------ 缓存 */
 
 /** storageKey -> 上次从云端读到的原始行数组（snake_case）。 */
@@ -260,14 +280,43 @@ function localToRows(spec, value, userId) {
   }
 }
 
-/** 行相等判断：只比双方都有的键，值用 JSON 比。 */
-function sameRow(a, b, keys) {
-  for (const k of keys) {
-    const va = a[k] === undefined ? null : a[k]
-    const vb = b[k] === undefined ? null : b[k]
-    if (JSON.stringify(va) !== JSON.stringify(vb)) return false
+/**
+ * 哪些列真的变了 —— 返回**库里那侧的列名**（snake_case）。
+ *
+ * ⚠️ 必须在**本地模型域**比较，不能在 DB 行域比。两边有三处天然不一致：
+ *
+ *   1. 我们只写 `spec.columns`，DB 行还多出 `created_at` / `updated_at` /
+ *      `reviewed_at` / `replied_at` 这类由 default 或触发器补的列；
+ *   2. 日期列在库里是 timestamptz 全精度，本地是 `YYYY-MM-DD`；
+ *   3. profiles 的 `role` / `disabled` 与本地 `isAdmin` 既不同名也不同形。
+ *
+ * 在 DB 行域按「键的并集」比 → **每一行永远判定为「变了」**。
+ * 后果不是慢一点，而是：
+ *   - 每次写都整表重 upsert（975 条书签时，改一个收藏也要重写 975 行）；
+ *   - `writeSites` 更狠，377 个站点逐个发 UPDATE（每个都被 RLS 挡下、刷一屏警告）；
+ *   - 实时同步会把它放大成事件风暴（N 行变更 → 给每台设备推 N 条）。
+ *
+ * 走 `rowToLocal()` 之后日期被截断成同一精度，多出来的列也不会被比较
+ * （我们只遍历**要写的那行**的列），三个问题一起消失。
+ */
+function changedColumns(prevRow, nextRow) {
+  const a = rowToLocal(nextRow)
+  const b = rowToLocal(prevRow)
+  const out = []
+  for (const col of Object.keys(nextRow)) {
+    if (col === 'user_id') continue
+    const camel = toCamelKey(col)
+    const va = a[camel] === undefined ? null : a[camel]
+    const vb = b[camel] === undefined ? null : b[camel]
+    if (JSON.stringify(va) !== JSON.stringify(vb)) out.push(col)
   }
-  return true
+  return out
+}
+
+/** 这一行相比云端现有那行，需不需要写。 */
+function rowChanged(prevRow, nextRow) {
+  if (!prevRow) return true
+  return changedColumns(prevRow, nextRow).length > 0
 }
 
 /**
@@ -297,7 +346,7 @@ async function writeSites(prevRows, nextRows) {
       continue
     }
 
-    const changed = Object.keys(row).filter((k) => JSON.stringify(prev[k]) !== JSON.stringify(row[k]))
+    const changed = changedColumns(prev, row)
     if (!changed.length) continue
 
     if (changed.length === 1 && changed[0] === 'views') {
@@ -354,12 +403,7 @@ async function writeCloud(key, value) {
   const nextIds = new Set(nextRows.map((r) => r[idCol]))
 
   // 1) 新增 + 改动
-  const toUpsert = nextRows.filter((row) => {
-    const prev = prevById.get(row[idCol])
-    if (!prev) return true
-    const keys = new Set([...Object.keys(row), ...Object.keys(prev)])
-    return !sameRow(row, prev, keys)
-  })
+  const toUpsert = nextRows.filter((row) => rowChanged(prevById.get(row[idCol]), row))
 
   if (toUpsert.length) {
     const opts = spec.conflict ? { onConflict: spec.conflict } : undefined
@@ -382,6 +426,77 @@ async function writeCloud(key, value) {
 
   snapshot.set(key, nextRows)
   return true
+}
+
+/* ------------------------------------------------------------ 实时变更 */
+
+/**
+ * 一条 DB 行 → 本地模型里「那一行」的形态。
+ * 与 readCloud 的各 kind 分支一一对应，只是这里只处理单行。
+ */
+function rowToLocalValue(spec, row) {
+  switch (spec.kind) {
+    case 'rows':
+      return spec.fromDb ? spec.fromDb(row) : rowToLocal(row)
+    case 'ids':
+      return row[spec.idColumn]
+    case 'map':
+      return row[spec.valueColumn]
+    case 'single':
+      return rowToLocal(row)
+    case 'blob':
+      return row.data
+    default:
+      return null
+  }
+}
+
+/**
+ * 处理一条 realtime 变更，返回「该往 state 上打什么补丁」：
+ *
+ *   { op: 'upsert', id, value }   新增或更新一行
+ *   { op: 'remove', id }          删掉一行
+ *   { op: 'reload' }              快照缺失，调用方应做一次全量重读
+ *   null                          不用管
+ *
+ * ⚠️ 这里**只维护快照，不碰 state**。state 归 useStore 管。
+ *    分开的用意是让「回声抑制」有个明确判据：调用方拿到 value 后
+ *    和 state 里的现值比一下，一样就什么都不做。
+ *    自己写下去的改动会被服务端**原样回推**一份，没有这一步的话，
+ *    每次写都会白刷一遍 UI（列表重排、输入框失焦、动画重放）。
+ */
+export function applyRemoteChange(key, eventType, newRow, oldRow) {
+  const spec = SPECS[key]
+  if (!spec) return null
+
+  const rows = snapshot.get(key)
+  /**
+   * ⚠️ 快照缺失时**不能**就地建一个。
+   *    只含这一行的快照会让下一次写把云端其余行全判成「已删除」——
+   *    那是真的删数据。宁可让调用方多做一次全量读。
+   */
+  if (rows == null) return { op: 'reload' }
+
+  const idCol = spec.kind === 'rows' ? 'id' : spec.idColumn || 'user_id'
+
+  if (eventType === 'DELETE') {
+    const id = (oldRow || {})[idCol]
+    // DELETE 的 old_record 默认只带主键列；连身份都拿不到就退回全量读
+    if (id === undefined) return { op: 'reload' }
+    const i = rows.findIndex((r) => r[idCol] === id)
+    if (i >= 0) rows.splice(i, 1)
+    return { op: 'remove', id }
+  }
+
+  const row = newRow || {}
+  const id = row[idCol]
+  if (id === undefined) return { op: 'reload' }
+
+  const i = rows.findIndex((r) => r[idCol] === id)
+  if (i >= 0) rows[i] = row
+  else rows.push(row)
+
+  return { op: 'upsert', id, value: rowToLocalValue(spec, row) }
 }
 
 /* ---------------------------------------------------------------- 适配器 */

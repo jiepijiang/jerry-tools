@@ -112,6 +112,9 @@ Pages 的 source 必须是 **GitHub Actions**。
   配了之后走真正的 Supabase Auth，密码不再明文存储
 - 首次登录时会把本机的书签/分类**迁移到云端**，但**云端已有数据时绝不覆盖**
   （多设备场景下那是灾难）
+- **实时多端同步**：登录后订阅自己的表，另一台设备的改动**不用刷新**就出现。
+  顶栏头像右下角有个状态点（绿=已连接 / 黄=连接中 / 红=断开），
+  点开有文字说明。需要先跑 `supabase/migrations/003-realtime.sql`，见下方专节
 
 ### 管理后台
 
@@ -227,6 +230,7 @@ src/
 │   ├── useStore.js      业务数据仓库（分类/书签/站点/收藏/便签/分享）
 │   ├── useSettings.js   设置项 + 主题属性
 │   ├── useAuth.js       用户系统（本地模拟 / Supabase Auth 双模）
+│   ├── useRealtime.js   实时多端同步（postgres_changes 订阅 + 幂等应用 + 重连重读）
 │   ├── useClock.js      时钟 / 农历 / 天气
 │   ├── useI18n.js       中英文案
 │   └── useToast.js      轻提示队列
@@ -257,8 +261,8 @@ src/
 
 supabase/                后端（建表 / 迁移 / 种子 / 验证），操作手册见其中的 README
 ├── README.md            后端操作手册（建表 / 迁移 / 灌种子 / 验证 / 已知限制）
-├── schema.sql           全量建表脚本（11 表 / 5 函数 / 4 触发器 / 23 策略）
-├── migrations/          增量迁移
+├── schema.sql           全量建表脚本（11 表 / 5 函数 / 4 触发器 / 23 策略 + realtime 发布）
+├── migrations/          增量迁移（001 复合主键 / 002 分享后缀唯一 / 003 realtime 发布）
 ├── seed-discover.mjs    灌 377 条发现页种子（幂等）
 └── verify-rls.mjs       RLS 隔离性验证（45 条成对断言）
 ```
@@ -400,7 +404,7 @@ const SEED_ADDITIONS = {
 | 3 | 数据适配层 | 1 个新文件 | ✅ 一个 `cloud.js` |
 | 4 | `useStore` 写操作 | **全量重写（约 20 个函数）** | ❌ **评估错了** —— 一行没改 |
 | 5 | 认证 | 1 个文件重写 | ✅ `useAuth.js` |
-| 6 | 多端同步 | `supabase.channel()` 订阅 | ⏸ **没做**（见下方「没做的」） |
+| 6 | 多端同步 | `supabase.channel()` 订阅 | ✅ 做了 —— `useRealtime.js` + `migrations/003` |
 | 7 | 图标存储 | 改走 Storage | ⏸ **没做**（当前仍存 base64 / URL） |
 | 8 | 浏览量计数 | 1 个 SQL 函数 | ✅ `increment_discover_site_views` |
 | 9 | 管理后台权限 | 改判断逻辑 | ✅ 走 `profiles.role` |
@@ -443,20 +447,44 @@ const SEED_ADDITIONS = {
 
 ### 没做的
 
-- **实时多端同步（`supabase.channel()`）**：当前是「登录 / 刷新时拉一次」，
-  两台设备同时开着不会实时互推。数据不会丢（写入即落库），
-  但另一台要刷新才看得到。要做的话是新增，不动现有代码。
 - **图标改走 Storage**：上传的图标仍以 base64 存在库里。
   图标一般只有几 KB，暂时不值得为它引入 Storage 的权限模型。
+- **发现页的浏览 / 收藏数不做实时**：`discover_sites` 的 `views` 每次点击都变，
+  订阅它等于给所有在线设备广播每一次点击。需要时刷新即可。
 - **发送确认邮件**：默认 SMTP 限流很严，索性关掉了邮箱确认
   （`mailer_autoconfirm: true`）。要发邮件得自备 SMTP。
+
+---
+
+## 实时多端同步
+
+登录后订阅自己那些表的变更，另一台设备改的东西**不用刷新**就会出现。
+实现在 `src/composables/useRealtime.js`，订阅清单在
+`src/data/adapters/cloud.js` 的 `REALTIME_TABLES`。
+
+> ⚠️ **必须先跑一次 `supabase/migrations/003-realtime.sql`。**
+> 新建的表不会自动进 `supabase_realtime` 发布，不跑的话功能**静默失效**：
+> `subscribe()` 照样报 `SUBSCRIBED`，但一条事件都收不到。
+> 详见 `supabase/README.md` 的「六、实时同步」。
+
+三个设计要点：
+
+1. **幂等应用 = 免费的回声抑制。** 自己写下去的改动会被服务端原样回推一份。
+   这里的做法是「拿到变更先和 state 现值比，一样就什么都不做」，
+   而不是「记住自己写过哪些 id 再过滤掉」—— 后者要考虑时间窗、并发写、失败重试，
+   很容易漏。
+2. **只维护快照，不碰 state。** `applyRemoteChange` 负责把 DB 行翻译成
+   「往 state 上打什么补丁」，`useRealtime` 负责落地。分开的用意就是让
+   上面那条比较有一个明确的判据。
+3. **重连后必须全量重读。** `postgres_changes` 没有回放，
+   断线期间的事件永远补不回来。
 
 ---
 
 ## 待办
 
 - [x] 接 Supabase：账号体系、跨设备同步、分享页、网站审核真正落库
-- [ ] 实时多端同步（`supabase.channel()` 订阅表变更），现在要刷新才看得到
+- [x] 实时多端同步（`supabase.channel()` 订阅表变更）
 - [ ] 图标改走 Supabase Storage（当前仍存 base64）
 - [ ] 书签排序支持跨分类拖拽的视觉反馈（当前是落下才生效）
 - [ ] 图标可选的「自动抓取」目前只回退到站点自己的 `/favicon.ico`，

@@ -274,6 +274,17 @@ export const messages = {
     'auth.needImage': '请选择图片文件',
     'auth.imageTooBig': '图片大小不能超过 2MB',
 
+    // 实时多端同步（登录后生效）
+    'sync.live': '实时同步中',
+    'sync.connecting': '正在连接…',
+    'sync.off': '仅本机',
+    'sync.error': '同步已断开',
+    'sync.applied': '本次已同步 {n} 项改动',
+    'sync.hintLive': '另一台设备的改动会自动出现在这里，不用刷新。',
+    'sync.hintOff': '未登录时数据只存在这台设备上。',
+    'sync.hintError': '实时同步断了，改动仍会保存，刷新页面可重新连接。',
+    'sync.hintNotEnabled': '服务端未开启实时同步，改动仍会保存，刷新后可见。',
+
     'admin.title': '管理后台',
     'admin.users': '用户管理',
     'admin.sites': '网站审核',
@@ -616,6 +627,17 @@ export const messages = {
     'auth.nicknameUpdated': 'Nickname updated',
     'auth.needImage': 'Please pick an image file',
     'auth.imageTooBig': 'Image must be under 2MB',
+
+    // Realtime multi-device sync (only when signed in)
+    'sync.live': 'Live sync on',
+    'sync.connecting': 'Connecting…',
+    'sync.off': 'This device only',
+    'sync.error': 'Sync disconnected',
+    'sync.applied': '{n} change(s) synced this session',
+    'sync.hintLive': 'Changes from your other devices show up here automatically, no refresh needed.',
+    'sync.hintOff': 'While signed out, data lives only on this device.',
+    'sync.hintError': 'Live sync dropped. Changes are still saved — refresh to reconnect.',
+    'sync.hintNotEnabled': 'Live sync is off on the server. Changes are still saved and show up after a refresh.',
 
     'admin.title': 'Admin',
     'admin.users': 'Users',
