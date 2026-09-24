@@ -1,22 +1,28 @@
 /* =========================================================================
-   数据适配层
+   数据适配层（路由）
    -------------------------------------------------------------------------
-   当前实现是 localStorage（纯前端，零后端）。
+   两个实现，按登录态切换：
 
-   之所以单独抽一层：之后若要接 Supabase，只要再写一个实现同样方法的
-   对象替换掉 `storage` 即可，上层 useStore 完全不用改。
-   方法都返回 Promise，方便以后换成真正的网络请求。
+     未登录 / 没配 Supabase  → localStorage（即接入前的行为，完全离线可用）
+     已登录                  → Supabase（跨设备同步）
 
-   接口约定（每个实体都是 list + 覆盖写）：
+   上层（useStore / useSettings / SettingsPanel）只认这组方法，不知道底下是谁：
+
      read(key)          -> any | null
-     write(key, value)  -> void
+     write(key, value)  -> boolean        写失败返回 false，调用方据此回滚
      remove(key)        -> void
-     readAll()          -> 全量快照（用于备份）
-     writeAll(snapshot) -> 全量恢复
+     readAll()          -> 全量快照（备份用）
+     writeAll(snapshot) -> boolean        全量恢复
+     clearBusiness()    -> void           只清业务数据，保留设置
+
+   ⚠️ 切换适配器后必须**重新 initStore**（见 useStore 的 reloadStore），
+      否则内存里还是上一个模式的数据。
    ========================================================================= */
 
 import { storageKeys } from '@/data/options'
 import { clone } from '@/utils/helpers'
+import { supabaseAdapter, setLocalFallback, clearCloudCache } from '@/data/adapters/cloud'
+import { supabaseConfigured } from '@/data/supabase'
 
 const PREFIX = 'jt:'
 
@@ -100,11 +106,58 @@ export const localStorageAdapter = {
   },
 }
 
+/* --------------------------------------------------------------- 路由 */
+
+// 云端适配器读不到本地键（session / seedVersion）时，回落到本地实现
+setLocalFallback(localStorageAdapter)
+
+let active = localStorageAdapter
+
+/** 当前适配器名，便于诊断页 / 控制台确认「我现在到底在用哪个」。 */
+export function activeAdapterName() {
+  return active.name
+}
+
+/** 切到云端。没配 Supabase 时是空操作，返回 false。 */
+export function useCloudStorage() {
+  if (!supabaseConfigured) return false
+  if (active === supabaseAdapter) return true
+  clearCloudCache()
+  active = supabaseAdapter
+  return true
+}
+
+/** 切回本地。 */
+export function useLocalStorage() {
+  if (active === localStorageAdapter) return true
+  clearCloudCache()
+  active = localStorageAdapter
+  return true
+}
+
+export function isCloudActive() {
+  return active === supabaseAdapter
+}
+
 /**
  * 当前生效的适配器。
- * 换成 Supabase 时：`export const storage = supabaseAdapter` 即可。
+ *
+ * 这里用**转发对象**而不是直接 `export let storage = active` ——
+ * ES module 的具名导出是活的绑定，但 `export let` 被重新赋值时，
+ * 已经 `import { storage }` 拿到的引用**不会**跟着变（Babel/Vite 的
+ * 转译行为不一致，很容易踩）。转发一次就完全没这个问题。
  */
-export const storage = localStorageAdapter
+export const storage = {
+  get name() {
+    return active.name
+  },
+  read: (key) => active.read(key),
+  write: (key, value) => active.write(key, value),
+  remove: (key) => active.remove(key),
+  readAll: () => active.readAll(),
+  writeAll: (snapshot) => active.writeAll(snapshot),
+  clearBusiness: () => active.clearBusiness(),
+}
 
 /** 备份快照的版本号，恢复时用来判断兼容性。 */
 export const SNAPSHOT_VERSION = 1

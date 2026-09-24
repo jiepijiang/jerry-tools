@@ -31,7 +31,38 @@ jobs:
         run: npm ci
 
       - name: Build
+        # Supabase 的 URL 和 anon key 是**构建期**注入的 —— Vite 的
+        # import.meta.env.VITE_* 在打包时做静态替换，运行时不读环境变量。
+        #
+        # ⚠️ 这里用 vars（仓库变量）而不是 secrets：anon key 本来就要发给
+        #    浏览器，不是秘密，放在 Variables 里更好排查。
+        #    真正的秘密是 service_role key，那个绝不能进这个工作流。
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
+
+      - name: 核对 Supabase 配置是否已注入
+        # 没注入的话线上会静默退回纯本地模式（页面照样能开，
+        # 只是登录、同步、分享全部不可用）—— 那种"看起来正常"的故障
+        # 最难发现，所以在构建日志里明确点出来。
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::warning title=未注入 Supabase 配置::线上会退回纯本地模式（登录/同步/分享不可用）。请到 Settings → Secrets and variables → Actions → Variables 添加 VITE_SUPABASE_URL 与 VITE_SUPABASE_ANON_KEY。"
+          else
+            echo "✅ 已注入 Supabase：$VITE_SUPABASE_URL（anon key 长度 ${#VITE_SUPABASE_ANON_KEY}）"
+            # 产物里必须能找到这个 URL。注意别拿域名当判据 —— 域名在别处也可能出现，
+            # 要查完整 URL 本身。
+            if grep -rqF "$VITE_SUPABASE_URL" dist/assets/; then
+              echo "✅ 产物里已包含 Supabase URL"
+            else
+              echo "::error title=注入失败::dist/assets 里找不到 Supabase URL，Vite 的 env 替换可能没生效。"
+              exit 1
+            fi
+          fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

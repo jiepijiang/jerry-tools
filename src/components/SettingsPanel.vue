@@ -184,10 +184,19 @@ async function clearBookmarks() {
 
 async function toggleShare(v) {
   await updateShare({ enabled: v })
+  // 开启时 store 可能会自动补一个后缀（空串会撞库里的唯一约束），
+  // 把输入框同步过来，否则用户看到的还是空的，一保存就把后缀覆盖没了
+  shareSlug.value = state.share.slug
 }
 
 async function saveSlug() {
   const slug = shareSlug.value.trim().replace(/[^\w-]/g, '')
+  // 空后缀不允许保存：会把自动生成的那个覆盖掉，而空串在库里没有意义
+  if (!slug) {
+    shareSlug.value = state.share.slug
+    toast(t('share.slugRequired'), 'warning')
+    return
+  }
   shareSlug.value = slug
   await updateShare({ slug })
   toast(t('toast.saved'))

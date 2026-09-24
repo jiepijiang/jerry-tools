@@ -7,7 +7,7 @@
    ========================================================================= */
 
 import { computed, reactive } from 'vue'
-import { storage } from '@/data/storage'
+import { storage, isCloudActive } from '@/data/storage'
 import { storageKeys } from '@/data/options'
 import { seedBookmarks, seedCategories } from '@/data/seed'
 import { seedSites } from '@/data/seed-discover'
@@ -71,7 +71,16 @@ const SEED_ADDITIONS = {
   2: { bookmarks: ['b22'] },
 }
 
-/** 首次启动时把种子数据写进去。 */
+/**
+ * 首次启动时把种子数据写进去。
+ *
+ * ⚠️ `sites`（发现页）在**云端模式下不落盘**。
+ *    `discover_sites` 是全局公开表，只有 admin 能写；
+ *    普通用户登录后如果在这里把 377 条种子写一遍，
+ *    会撞上 RLS、刷一屏 `new row violates row-level security policy`。
+ *    全局数据由 `supabase/seed-discover.mjs` 用 service_role 灌一次，
+ *    这里只在读到空的时候**在内存里**用种子兜底显示。
+ */
 async function seedIfEmpty() {
   const cats = await storage.read(storageKeys.categories)
   if (!cats || !cats.length) {
@@ -90,11 +99,11 @@ async function seedIfEmpty() {
   }
 
   const sites = await storage.read(storageKeys.sites)
-  if (!sites || !sites.length) {
-    state.sites = clone(seedSites)
-    await persist(storageKeys.sites, state.sites)
-  } else {
+  if (sites && sites.length) {
     state.sites = sites
+  } else {
+    state.sites = clone(seedSites)
+    if (!isCloudActive()) await persist(storageKeys.sites, state.sites)
   }
 }
 
@@ -133,10 +142,14 @@ async function syncSeedAdditions() {
   await persist(storageKeys.seedVersion, SEED_VERSION)
 }
 
-/** 应用启动时调一次。 */
-export async function initStore() {
-  if (state.ready) return
-
+/**
+ * 从当前生效的适配器把数据读进内存。
+ *
+ * 云端模式下 `session` 不由 storage 提供 —— 那是 Supabase Auth 的事
+ * （storage 里的 `jt:session` 只在本地模式有意义）。云端登录态由
+ * useAuth 写进 `state.session`。
+ */
+async function loadAll() {
   await seedIfEmpty()
   // 紧跟其后：给老用户补种子里新增的条目（全新用户这里是空操作）
   await syncSeedAdditions()
@@ -146,14 +159,19 @@ export async function initStore() {
   state.feedback = (await storage.read(storageKeys.feedback)) || []
   state.notes = (await storage.read(storageKeys.notes)) || []
   state.users = (await storage.read(storageKeys.users)) || []
-  state.session = await storage.read(storageKeys.session)
   state.visits = (await storage.read(storageKeys.visits)) || {}
+
+  if (!isCloudActive()) {
+    state.session = await storage.read(storageKeys.session)
+  }
 
   const share = await storage.read(storageKeys.share)
   if (share) state.share = { ...state.share, ...share }
 
-  // 预置一个管理员账号，方便直接体验后台
-  if (!state.users.length) {
+  // 预置一个管理员账号，方便直接体验后台。
+  // 只在本地模式做 —— 云端模式下 profiles.id 是 uuid，
+  // 塞 'u_admin' 这种字符串会直接违反类型约束。
+  if (!isCloudActive() && !state.users.length) {
     state.users = [
       {
         id: 'u_admin',
@@ -171,6 +189,24 @@ export async function initStore() {
   }
 
   state.ready = true
+}
+
+/** 应用启动时调一次。 */
+export async function initStore() {
+  if (state.ready) return
+  await loadAll()
+}
+
+/**
+ * 强制重新加载（忽略 ready 标志）。
+ *
+ * **切换适配器后必须调这个**：登录 → 云端、退出 → 本地，
+ * 内存里那份数据属于上一个模式，不重读的话页面会显示别人的数据
+ * （或者退出登录后还看得见云端内容）。
+ */
+export async function reloadStore() {
+  state.ready = false
+  await loadAll()
 }
 
 /* ------------------------------------------------------------------ 派生 */
@@ -537,8 +573,31 @@ export async function deleteNote(id) {
 
 /* ------------------------------------------------------------------ 分享 */
 
+/**
+ * 生成一个分享后缀。
+ *
+ * 为什么要自动生成而不是让用户先填：库里的 `slug` 对**非空**值要求全局唯一，
+ * 而前端默认是空串。用户在设置面板里直接点「开启分享」开关时，
+ * 若还没有后缀，写下去的会是空串 —— 加上唯一约束就会撞 23505，
+ * 而且**只有第二个用户会撞**，单机测试永远发现不了。
+ *
+ * 所以开启分享时兜一个随机的：`<昵称>-<5 位随机>`。
+ * 用户想要好看的后缀，之后在输入框里改就行。
+ */
+function genSlug(base) {
+  const stem =
+    String(base || '')
+      .toLowerCase()
+      .replace(/[^\w-]/g, '')
+      .slice(0, 16) || 'nav'
+  return `${stem}-${Math.random().toString(36).slice(2, 7)}`
+}
+
 export async function updateShare(patch) {
-  state.share = { ...state.share, ...patch }
+  const next = { ...state.share, ...patch }
+  // 开启分享但还没有后缀 → 自动生成一个，别把空串写进库
+  if (next.enabled && !String(next.slug || '').trim()) next.slug = genSlug(next.displayName)
+  state.share = next
   return persist(storageKeys.share, state.share)
 }
 
