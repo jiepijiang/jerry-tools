@@ -123,7 +123,7 @@ async function onFile(e) {
       selected.value = new Set(parsed.value.map((_, i) => i))
     }
   } catch {
-    toast(t('import.importFail'), 'error')
+    toast(t('toast.importFail'), 'error')
   }
 }
 
@@ -202,7 +202,7 @@ async function doImport() {
     toast(t('import.done', { n: res.created, u: res.updated }))
     emit('update:modelValue', false)
   } catch {
-    toast(t('import.importFail'), 'error')
+    toast(t('toast.importFail'), 'error')
   } finally {
     importing.value = false
   }

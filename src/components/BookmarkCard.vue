@@ -25,13 +25,27 @@ const props = defineProps({
   bookmark: { type: Object, required: true },
   /** 由父级强制压到「紧凑」密度（极简布局用） */
   dense: { type: Boolean, default: false },
-  /** 是否显示拖拽手柄 */
+  /** 是否显示拖拽手柄，并让卡片真的可拖 */
   draggable: { type: Boolean, default: false },
   /** 是否显示编辑/删除 */
   editable: { type: Boolean, default: false },
+  /** 正在被拖拽的那张（源卡片）—— 父级按 id 判定 */
+  dragging: { type: Boolean, default: false },
+  /** 当前悬停的落点 —— 父级按 id 判定 */
+  dropping: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['open', 'edit', 'delete', 'dragstart'])
+/**
+ * ⚠️ `dragstart` / `dragend` / `dragover` / `drop` **必须列进来**。
+ *
+ * 列进 `defineEmits` 之后，父级写的 `@dragstart` 会被当成**组件事件**，
+ * 原生事件不会自己冒泡上去 —— 所以下面必须在根元素上**显式 emit**。
+ *
+ * 反过来，**不列**进来也不行：那样父级的 `@dragstart` 会变成原生监听器挂在根元素上，
+ * 而根元素在 `draggable=false` 时也会收到冒泡上来的 dragstart（比如从别处拖进来），
+ * 于是「拖了 A 却记成 B」这种鬼故事就来了。
+ */
+const emit = defineEmits(['open', 'edit', 'delete', 'dragstart', 'dragend', 'dragover', 'drop'])
 
 const pressed = ref(false)
 
@@ -48,6 +62,57 @@ function open() {
   emit('open', props.bookmark)
 }
 
+/* ------------------------------------------------------------ 拖拽 */
+
+function onDragStart(e) {
+  if (!props.draggable) return
+  /*
+   * ⚠️ `setData` 不是可选的：**Firefox 里不调它，拖拽根本不会启动**
+   *    （表现为「按住拖不动」，Chrome 下却正常 —— 很容易被当成浏览器怪癖）。
+   *    值本身用不上（状态走 emit 传），但必须写一个。
+   */
+  try {
+    e.dataTransfer.setData('text/plain', props.bookmark.url || props.bookmark.name || '')
+    e.dataTransfer.effectAllowed = 'move'
+  } catch {
+    /* 某些环境拿不到 dataTransfer，不影响拖拽本身 */
+  }
+  emit('dragstart', props.bookmark)
+}
+
+function onDragEnd() {
+  emit('dragend', props.bookmark)
+}
+
+/**
+ * 落点高亮靠 dragover 持续触发来更新（**不靠 dragleave**）。
+ *
+ * `dragleave` 在子元素之间穿梭时会疯狂触发，用它清高亮会闪；
+ * 而 dragover 是持续触发的，最后一次落在谁身上谁就是当前落点，
+ * 天然自洽。清空交给 dragend / drop。
+ *
+ * `.stop` 是必须的：卡片在分组容器内部，不拦的话事件会继续冒泡到
+ * 分组容器的 dragover，把高亮从「某张卡片」改成「整个分组」。
+ */
+function onDragOver(e) {
+  if (!props.draggable) return
+  e.preventDefault()
+  e.stopPropagation()
+  try {
+    e.dataTransfer.dropEffect = 'move'
+  } catch {
+    /* 忽略 */
+  }
+  emit('dragover', props.bookmark)
+}
+
+function onDrop(e) {
+  if (!props.draggable) return
+  e.preventDefault()
+  e.stopPropagation()
+  emit('drop', props.bookmark)
+}
+
 function onMouseDown() {
   pressed.value = true
 }
@@ -60,7 +125,8 @@ function onRelease() {
 <template>
   <div
     class="bm-card"
-    :class="[settings.cardStyle, `density-${density}`, { pressed }]"
+    :class="[settings.cardStyle, `density-${density}`, { pressed, dragging, dropping }]"
+    :draggable="draggable"
     role="link"
     tabindex="0"
     @mousedown="onMouseDown"
@@ -72,6 +138,10 @@ function onRelease() {
     @click="open"
     @keydown.enter="open"
     @keydown.space.prevent="open"
+    @dragstart="onDragStart"
+    @dragend="onDragEnd"
+    @dragover="onDragOver"
+    @drop="onDrop"
   >
     <div v-if="draggable" class="bm-grip" title="拖拽排序" @mousedown.stop @click.stop>
       <AppIcon name="GripVertical" :size="15" />
@@ -141,6 +211,39 @@ function onRelease() {
 
 .bm-card.pressed {
   transform: scale(0.94);
+}
+
+/* —— 拖拽 —— */
+
+/* 源卡片：半透明 + 虚线边，明确「它正在被搬走」。
+   不用 `display:none` —— 那样网格会立刻重排，拖到一半布局跳一下很难受。 */
+.bm-card.dragging {
+  border-style: dashed;
+  opacity: 0.4;
+}
+
+.bm-card.dragging:hover {
+  transform: none;
+}
+
+/* 落点卡片：左边一条竖线，表示「会插到它前面」。
+   `outline` 而不是 `border` —— 加 border 会让卡片尺寸变 1px，整行跟着抖。
+   `::before` 定位到卡片外侧，不占布局。 */
+.bm-card.dropping::before {
+  background: var(--accent-text);
+  border-radius: 2px;
+  bottom: -2px;
+  content: '';
+  left: -7px;
+  position: absolute;
+  top: -2px;
+  width: 3px;
+}
+
+/* 极简布局是紧凑列表，竖线贴太近会看不清，往外挪一点 */
+.bm-card.density-compact.dropping::before,
+.bm-card.density-icon.dropping::before {
+  left: -5px;
 }
 
 /* —— 柔和阴影：浅色下用双向阴影做浮雕感 —— */

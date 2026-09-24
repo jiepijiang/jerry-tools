@@ -50,14 +50,34 @@ const bookmarkDialog = ref({ open: false, bookmark: null, categoryId: '' })
 const categoryDialog = ref({ open: false, category: null, parentId: null })
 const confirmState = ref({ open: false, title: '', text: '', action: null })
 
-const dragState = ref({ id: null, categoryId: null })
+/** 正在拖的那张卡片。`name` 用来在空落点上显示「将「X」放入此处」。 */
+const dragState = ref({ id: null, categoryId: null, name: '' })
+
+/**
+ * 当前悬停的落点。
+ * - `kind: 'card'`  → 插到这张卡片**前面**
+ * - `kind: 'group'` → 追加到该分组**末尾**
+ *
+ * 只靠 dragover 持续刷新（不用 dragleave，那个在子元素间穿梭时会闪）。
+ */
+const dropTarget = ref({ kind: '', id: '', categoryId: '' })
 
 /* ---------------------------------------------------------------- 派生 */
 
 /** 当前筛选下要展示的分组。 */
 const groups = computed(() => {
   const all = groupedBookmarks.value
-  if (!activeCategory.value) return all.filter((g) => g.bookmarks.length || g.subs.length)
+  if (!activeCategory.value) {
+    /*
+     * 拖拽中把**空分类也放出来**当落点。
+     *
+     * 平时空分类是藏起来的（不然一屏全是「暂无内容」），但拖拽时它必须可见 ——
+     * 否则「把书签挪进一个空分类」这个操作根本没有下手的地方，
+     * 得先去侧栏选中那个分类才行，非常反直觉。
+     */
+    if (dragState.value.id) return all
+    return all.filter((g) => g.bookmarks.length || g.subs.length)
+  }
 
   const cat = categoryMap.value[activeCategory.value]
   if (!cat) return all
@@ -177,15 +197,60 @@ async function onSidebarMove({ from, to }) {
   toast(ok ? t('toast.sortSaved') : t('toast.rolledBack'), ok ? 'success' : 'error')
 }
 
-/** 卡片拖拽：同一分类内换位，跨分类则移动过去。 */
-function onCardDragStart(b, categoryId) {
-  dragState.value = { id: b.id, categoryId }
+/**
+ * 卡片拖拽：同一分类内换位，跨分类则移动过去。
+ *
+ * 落点语义统一为「**插到目标卡片前面**」——
+ * 因为视觉提示就是目标卡片左边那条竖线，两者必须一致。
+ * 想放到某个分类的**末尾**，就往那个分组的空白处放（走 onGroupDrop）。
+ */
+async function onCardDragStart(b, categoryId) {
+  dragState.value = { id: b.id, categoryId, name: b.name }
+  dropTarget.value = { kind: '', id: '', categoryId: '' }
+}
+
+/** 拖拽结束（含中途按 Esc 取消）—— 清掉所有高亮。 */
+function onCardDragEnd() {
+  clearDrag()
+}
+
+function clearDrag() {
+  dragState.value = { id: null, categoryId: null, name: '' }
+  dropTarget.value = { kind: '', id: '', categoryId: '' }
+}
+
+/** 悬停到某张卡片上 → 高亮它（落点 = 它前面）。 */
+function onCardDragOver(b, categoryId) {
+  if (!dragState.value.id) return
+  dropTarget.value = { kind: 'card', id: b.id, categoryId }
+}
+
+/**
+ * 悬停到分组的空白处 → 高亮整个分组（落点 = 该分类末尾）。
+ *
+ * ⚠️ `preventDefault()` 必须放在**所有 early return 之前**，这是最容易写错的一处：
+ *    `dragover` 在悬停期间是**持续触发**的。第一次进来把 dropTarget 设成这个分组，
+ *    之后每一次都会命中下面那条「已经是它了，不用改」的 early return。
+ *    如果 `preventDefault` 写在 return 之后，那么**只有第一次**被 preventDefault，
+ *    后面全都不 —— 浏览器据此认为这里不接受放置，`drop` 永远不会派发，
+ *    表现为「高亮得好好的，一松手什么也没发生」。
+ *
+ * ⚠️ 另外还要判断 `e.target` 是不是在卡片里：dragover 会从卡片冒泡上来，
+ *    不判的话「悬停在卡片上」会被这里覆盖成「整个分组」，竖线一闪就没了。
+ *    卡片那边也做了 `@dragover.stop`，这里是第二道保险。
+ */
+function onGroupDragOver(e, categoryId) {
+  if (!dragState.value.id) return
+  e.preventDefault()
+  if (e.target?.closest?.('.bm-card')) return
+  if (dropTarget.value.kind === 'group' && dropTarget.value.categoryId === categoryId) return
+  dropTarget.value = { kind: 'group', id: '', categoryId }
 }
 
 async function onCardDrop(target, categoryId) {
   const src = dragState.value
-  dragState.value = { id: null, categoryId: null }
-  if (!src.id || src.id === target.id) return
+  clearDrag()
+  if (!src.id || !target?.id || src.id === target.id) return
 
   if (src.categoryId === categoryId) {
     const list = state.bookmarks
@@ -195,13 +260,31 @@ async function onCardDrop(target, categoryId) {
     const fi = list.indexOf(src.id)
     const ti = list.indexOf(target.id)
     if (fi < 0 || ti < 0) return
-    list.splice(ti, 0, list.splice(fi, 1)[0])
+    // 摘掉源之后，目标左边的元素会左移一位。所以「插到 ti - 1」才是
+    // 「插到目标前面」；源本来就在目标前面时（fi === ti - 1）什么都不用做。
+    if (fi === ti - 1) return
+    list.splice(fi, 1)
+    list.splice(ti > fi ? ti - 1 : ti, 0, src.id)
     const ok = await reorderBookmarks(list)
     toast(ok ? t('toast.sortSaved') : t('toast.rolledBack'), ok ? 'success' : 'error')
   } else {
-    const ok = await moveBookmark(src.id, categoryId, null)
-    toast(ok ? t('toast.moved') : t('toast.moveFailed', undefined) || t('toast.rolledBack'), ok ? 'success' : 'error')
+    // 跨分类：插到目标卡片前面。index 是「目标在**不含源**的兄弟列表里」的下标。
+    const siblings = state.bookmarks
+      .filter((b) => b.categoryId === categoryId && b.id !== src.id)
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    const at = siblings.findIndex((b) => b.id === target.id)
+    const ok = await moveBookmark(src.id, categoryId, at < 0 ? null : at)
+    toast(ok ? t('toast.moved') : t('toast.moveFail'), ok ? 'success' : 'error')
   }
+}
+
+/** 落在分组空白处 → 挪到该分类末尾（空分类也只能这样落）。 */
+async function onGroupDrop(categoryId) {
+  const src = dragState.value
+  clearDrag()
+  if (!src.id || src.categoryId === categoryId) return
+  const ok = await moveBookmark(src.id, categoryId, null)
+  toast(ok ? t('toast.moved') : t('toast.moveFail'), ok ? 'success' : 'error')
 }
 
 function toggleCat(id) {
@@ -212,11 +295,6 @@ function toggleCat(id) {
 
 function isCatCollapsed(id) {
   return collapsedCats.value.includes(id)
-}
-
-/** 拖拽排序用的 dataTransfer（卡片走 HTML5 DnD）。 */
-function onDragOver(e) {
-  e.preventDefault()
 }
 
 async function quickToggleEdit() {
@@ -320,7 +398,16 @@ async function quickToggleEdit() {
           </div>
         </header>
 
-        <div v-show="!(settings.layout === 'drawer' && isCatCollapsed(group.category.id))" class="group-body">
+        <div
+          v-show="!(settings.layout === 'drawer' && isCatCollapsed(group.category.id))"
+          class="group-body"
+          :class="{
+            droppable: !!dragState.id,
+            'drag-over': dropTarget.kind === 'group' && dropTarget.categoryId === group.category.id,
+          }"
+          @dragover="onGroupDragOver($event, group.category.id)"
+          @drop="onGroupDrop(group.category.id)"
+        >
           <!-- 一级分类下的书签 -->
           <div v-if="group.bookmarks.length" class="grid" :class="gridDensityClass" :style="gridStyle">
             <BookmarkCard
@@ -330,10 +417,15 @@ async function quickToggleEdit() {
               :dense="settings.layout === 'minimal'"
               :draggable="settings.editMode"
               :editable="settings.editMode"
+              :dragging="dragState.id === b.id"
+              :dropping="dropTarget.kind === 'card' && dropTarget.id === b.id"
               @open="openBookmark"
               @edit="editBookmark"
               @delete="askDeleteBookmark"
               @dragstart="onCardDragStart(b, group.category.id)"
+              @dragend="onCardDragEnd"
+              @dragover="onCardDragOver(b, group.category.id)"
+              @drop="onCardDrop(b, group.category.id)"
             />
           </div>
 
@@ -352,22 +444,30 @@ async function quickToggleEdit() {
                 :dense="settings.layout === 'minimal'"
                 :draggable="settings.editMode"
                 :editable="settings.editMode"
+                :dragging="dragState.id === b.id"
+                :dropping="dropTarget.kind === 'card' && dropTarget.id === b.id"
                 @open="openBookmark"
                 @edit="editBookmark"
                 @delete="askDeleteBookmark"
                 @dragstart="onCardDragStart(b, sub.category.id)"
+                @dragend="onCardDragEnd"
+                @dragover="onCardDragOver(b, sub.category.id)"
+                @drop="onCardDrop(b, sub.category.id)"
               />
             </div>
           </div>
 
-          <!-- 空分类（编辑模式下给个落点） -->
+          <!--
+            空分类的落点。
+            ⚠️ 这里**不再自己挂 drop** —— 它在 .group-body 内部，
+               事件冒泡上去由 onGroupDrop 统一处理（落点 = 该分类末尾）。
+               自己再挂一个的话，两个处理器都会跑，会重复移动一次。
+          -->
           <div
             v-if="settings.editMode && !group.bookmarks.length && !group.subs.length"
             class="empty-drop"
-            @dragover="onDragOver"
-            @drop="onCardDrop({ id: '__empty__' }, group.category.id)"
           >
-            {{ t('common.empty') }}
+            {{ dragState.id ? t('bookmark.dropHere', { name: dragState.name }) : t('common.empty') }}
           </div>
         </div>
       </section>
@@ -566,6 +666,30 @@ async function quickToggleEdit() {
 /* —— 网格 —— */
 .group-body {
   margin-top: 12px;
+}
+
+/* —— 拖拽落点 —— */
+
+/* 拖拽中：所有分组都亮出「可以往这儿放」的虚线框。
+   不这样做的话，用户不知道哪些区域是落点，只能靠试。 */
+.group-body.droppable {
+  border: 1px dashed transparent;
+  border-radius: var(--radius);
+  outline: 1px dashed var(--border_color);
+  outline-offset: 6px;
+  padding: 2px;
+}
+
+/* 当前悬停的分组：换成实色强调 + 淡底，明确「松手就放这儿」 */
+.group-body.drag-over {
+  background-color: var(--item_hover_color);
+  outline: 2px dashed var(--accent-text);
+}
+
+/* 拖拽中给空落点加个底，让它从「一句灰字」变成看得见的框 */
+.group-body.droppable .empty-drop {
+  border-color: var(--accent-text);
+  color: var(--accent-text);
 }
 
 .grid {

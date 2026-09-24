@@ -265,7 +265,7 @@ const shareUrl = computed(() => {
 async function copyShare() {
   if (!shareUrl.value) return
   const ok = await copyText(shareUrl.value)
-  toast(ok ? t('common.linkCopied') : t('toast.fail', undefined) || t('toast.saveFail'), ok ? 'success' : 'error')
+  toast(ok ? t('common.linkCopied') : t('common.copyFail'), ok ? 'success' : 'error')
 }
 </script>
 

@@ -647,13 +647,124 @@ const SEED_ADDITIONS = {
 
 ---
 
+## 书签拖拽排序
+
+编辑模式下卡片可以拖拽：**同一分类内换位**，或**拖到别的分类**。
+
+落点语义统一成一句话 —— **插到目标卡片前面**。因为视觉提示就是目标卡片
+左边那条竖线，两者必须一致，否则用户看到的和实际发生的对不上。
+想放到某个分类的**末尾**，就往那个分组的空白处放。
+
+### ⚠️ 这一版之前，拖拽其实是坏的
+
+README 原来只写「当前是落下才生效」，实测比这严重得多（`drag-probe.mjs` 一开始 **2 / 5**）：
+
+| 症状 | 原因 |
+| --- | --- |
+| 卡片根本拖不动 | 根元素上没有 `:draggable`，`draggable` prop 只用来显示手柄 |
+| 拖到哪儿都落不下 | 卡片上没有 `@dragover` / `@drop`，`dragover` 的 `defaultPrevented` 恒为 `false` |
+| 拖了没反应 | `dragstart` 被列进 `defineEmits`，父组件的 `@dragstart` 变成**组件事件**，原生事件不会冒泡上去，`onCardDragStart` 永不触发 |
+| 只有「拖进空分类」一条路能走 | `onCardDrop` 只有一个调用点（空分类的 `.empty-drop`） |
+| 拖拽全程零反馈 | 没有任何 `.dragging` / `.dropping` 样式 |
+
+### 四个必须做对的地方
+
+1. **`dragstart` / `dragend` / `dragover` / `drop` 一定要列进 `defineEmits`，
+   并且必须在根元素上显式 `emit`。**
+   列进去之后父级的 `@dragstart` 是**组件事件**，原生事件不会自己冒泡上去 ——
+   所以子组件里得手动 `emit`。
+   反过来不列也不行：那样父级监听器会变成挂在根元素上的**原生监听器**，
+   而根元素在 `draggable=false` 时也会收到冒泡上来的 `dragstart`，
+   于是「拖了 A 却记成 B」。
+
+2. **`dataTransfer.setData()` 不是可选的。**
+   **Firefox 里不调它，拖拽根本不会启动**（表现为「按住拖不动」），
+   Chrome 下却完全正常 —— 很容易被当成浏览器怪癖。
+   值本身用不上（状态走 `emit` 传），但必须写一个。
+
+3. **`preventDefault()` 必须放在所有 early return 之前。**
+   `dragover` 在悬停期间是**持续触发**的。第一次进来把落点设成这个分组，
+   之后每次都命中「已经是它了，不用改」的 early return ——
+   如果 `preventDefault` 写在 return 后面，就只有**第一次**被 preventDefault，
+   浏览器据此认为这里不接受放置，`drop` 永远不派发。
+   表现是**「高亮得好好的，一松手什么也没发生」**，极难查。
+
+4. **卡片上的 `dragover` 要 `stopPropagation`。**
+   卡片在分组容器内部，不拦的话事件继续冒泡到分组的 `dragover`，
+   落点会从「某张卡片」被改成「整个分组」，竖线一闪就没了。
+
+### 视觉反馈
+
+- **源卡片**：`.dragging` → 半透明 + 虚线边。不用 `display:none`，
+  那样网格会立刻重排，拖到一半布局跳一下很难受。
+- **落点卡片**：`.dropping::before` → 左边一条 3px 竖线。
+  用 `::before` 而不是 `border`，因为加 border 会让卡片尺寸变 1px，**整行跟着抖**。
+- **分组**：拖拽中所有分组亮出 `.droppable` 虚线框（不这样用户不知道哪儿能放），
+  当前悬停的那个换成 `.drag-over` 实色强调。
+- **高亮靠 `dragover` 持续刷新，不靠 `dragleave`。**
+  `dragleave` 在子元素之间穿梭时会疯狂触发，用它清高亮会闪。
+- **拖拽中把空分类也放出来**（`groups` computed 里判断 `dragState.id`）。
+  平时空分类是藏起来的，但拖拽时它必须可见 ——
+  否则「把书签挪进一个空分类」这个操作根本没有下手的地方。
+
+### 回归脚本
+
+`/tmp/jerry-sb/drag-probe.mjs`（25 条断言）。可以用环境变量扫全部布局：
+
+```bash
+LAYOUT=grid DENSITY=icon STYLE=mac node drag-probe.mjs http://127.0.0.1:5199/jerry-tools/
+```
+
+已覆盖 `grid` / `minimal` / `drawer` × `normal` / `compact` / `icon` ×
+`default` / `neumorphic` / `mac`，**7 个组合全 25 / 0**。
+
+**⚠️ 写这类探针有三个坑，都会伪装成「功能坏了」**（第一版就全踩了）：
+
+1. **`dragTo()` 是原子的** —— 拖到一半的 DOM 状态（高亮、空分类出现）
+   全被吞掉。而「拖到一半」恰恰是唯一能看到视觉反馈的时刻。
+   要改用 `mouse.move` / `mouse.down` / `mouse.move` 手动分步，**中途停下来查 DOM**。
+2. **拖到目标后要再补 1px 微动。** Chromium 在拖拽期间会合并鼠标移动事件，
+   最后一个位置的 `dragover` **要等下一个输入事件才送达**。
+   不补这一下，读到的落点是上一张卡片，看起来像「高亮标错了卡片」，
+   但真松手时 `drop` 又是对的。真实鼠标每几像素一个事件，看不出这个延迟。
+3. **读样式要读 `.bm-card.dragging`，不能读 `document.querySelector('.bm-card')`。**
+   后者是 DOM 里的第一张卡片，通常**不是**正在拖的那张。
+4. 另外：分组根元素的类名是 **`.cat-group`**，不是 `.group`；
+   图标密度下 `.bm-text` 根本不渲染（`v-if="density !== 'icon'"`），
+   所以别用卡片文字来认卡片，**拖之前给元素打编号**才跨密度通用。
+
+---
+
 ## 待办
 
 - [x] 接 Supabase：账号体系、跨设备同步、分享页、网站审核真正落库
 - [x] 实时多端同步（`supabase.channel()` 订阅表变更）
 - [x] 发现页的 `collects` 收藏数接真实数据（`favorites` 触发器维护，见「收藏数是怎么算的」）
 - [ ] 图标改走 Supabase Storage（当前仍存 base64）
-- [ ] 书签排序支持跨分类拖拽的视觉反馈（当前是落下才生效）
+- [x] **书签跨分类拖拽 + 视觉反馈**（2026-09-24）
+      顺带修掉了一个**比待办里写的严重得多**的真 bug ——
+      原来卡片**根本没接上拖拽**（拖不动、落不下、拖了没反应，只有
+      「拖进空分类」一条路能走）。详见「书签拖拽排序」一节。
+      现在 `drag-probe.mjs` 在 7 个布局/密度/卡片样式组合下全 **25 / 0**。
+- [x] **i18n 漏 key 的两道守卫**（2026-09-24）
+      起因是这轮自己写出 `t('toast.moveFailed')` —— 真实 key 是 `toast.moveFail`。
+      `translate()` 取不到 key 时**静默返回 key 本身**，所以界面上会明晃晃
+      显示 `toast.moveFailed`，不报错不崩；更坑的是
+      `t('x') || t('y')` 这种「兜底写法」**救不了** —— 返回值是 truthy 字符串，
+      `||` 右边永远不执行。加了守卫后立刻又扫出两个同类错键：
+      `import.importFail`（ImportDialog，2 处）、`toast.fail`（SettingsPanel）。
+      两道守卫分工：
+      1. `i18n-parity.mjs`（静态，21 条）：扫源码里 `t('…')` 的字面量跟语言包对，
+         外加「禁止 `t('a') || t('b')` 死兜底」一条。
+      2. `i18n-render.mjs`（动态，14 条）：真开浏览器，**中英各扫一遍**页面上
+         实际渲染出的文字，看有没有漏出 key 字面量。
+         ⚠️ 判据是「第一段 ∈ 语言包命名空间」而不是「长得像 a.b」——
+         后者会把发现页/图标管理页上的**域名**全报出来
+         （`rytr.me`、`www.jasper.ai`、`app.diagrams.net`……）。
+      ⚠️ 写这道守卫时**自己踩了两次「假绿」**，都记在脚本注释里：
+      `page.evaluate` 序列化函数时引用不到模块级常量 → ReferenceError 被
+      `.catch(() => [])` 吞掉；以及 `page.evaluate(fn, arg)` **只传一个参数**，
+      传数组给两个形参会静默错位。**写完必须故意制造一次失败验证它真能红。**
 - [ ] 图标可选的「自动抓取」目前只回退到站点自己的 `/favicon.ico`，
       覆盖率约 57%。想要更高覆盖率需要自建一个抓取 `<link rel="icon">` 的代理服务
       （浏览器端受 CORS 限制做不了）。
