@@ -531,13 +531,20 @@ const SEED_ADDITIONS = {
 - [ ] 图标可选的「自动抓取」目前只回退到站点自己的 `/favicon.ico`，
       覆盖率约 57%。想要更高覆盖率需要自建一个抓取 `<link rel="icon">` 的代理服务
       （浏览器端受 CORS 限制做不了）
-- [ ] **种子数据里有 44 条 icon 指向第三方 favicon 服务**，与
-      `helpers.js` 里「特意不用 Google favicon 服务」的政策冲突。
-      实测：31 条 `icons.duckduckgo.com/ip3/*.ico` + 13 条 `t0.gstatic.com/faviconV2`。
-      这些在国内不可达（或会被限流），表现是这 44 个图标空着走首字母兜底。
-      修法：把它们改写成 `https://<origin>/favicon.ico`（与 `faviconOf` 的策略对齐）。
-      改完要重跑 `seed-discover.mjs`（**现在重跑不会覆盖 views/collects**，安全）。
+- [ ] **种子数据里有 37 条 icon 不该这么写**（377 条里），实测分布：
+      | 条数 | 写的是什么 | 问题 |
+      | --- | --- | --- |
+      | 31 | `https://icons.duckduckgo.com/ip3/<域名>.ico` | 第三方服务，国内不可达 |
+      | 5 | `https://www.google.com/s2/favicons?domain=…` | **正是 `helpers.js` 注释里说「特意不用」的那个服务** |
+      | 1 | `http://regex101.com/static/assets/icon-192.png` | **明文 http** → HTTPS 页面上报 Mixed Content 警告 |
+      表现：图标空着走首字母兜底；那条 http 的还会在线上控制台留警告。
+      修法：**直接删掉这些条目的 `icon` 字段** —— `faviconOf` 会自动回落到
+      `https://<origin>/favicon.ico`，既对齐策略又少一份要维护的数据。
+      改完重跑 `seed-discover.mjs`（**现在重跑不会覆盖 views/collects**，安全）；
+      已上线的库要么重跑种子，要么手工 `update discover_sites set icon = '' where …`。
       ⚠️ 本地模式的老用户看不到 —— `seedIfEmpty` 只在存储为空时灌种子，
       要么升 `SEED_VERSION` 走 `SEED_ADDITIONS`，要么让他们重登一次从云端拉。
+      （另有 3 条 `mail.google.com` / `drive.google.com` / `ai.google.dev` 的
+      icon 是站点自己的资源，正常，别一起删了。）
 - [ ] `.bm-desc` 改成允许两行（或把描述上限写进编辑器的字数校验）。
       现在只剩 0.5px 余量，任何补充说明都塞不进去，见上方「数据层与已知限制」末尾
