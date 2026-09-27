@@ -86,6 +86,15 @@ Pages 的 source 必须是 **GitHub Actions**。
 - **书签提示框**：悬停显示详情（可关）
 - **编辑模式**：一键开关所有增删改入口
 
+> **⚠️ 「布局」会覆盖「排列密度」这一条要心里有数。**
+> `HomeView.vue` 里 `gridDensityClass = density-${layout === 'minimal' ? 'compact' : density}`
+> —— **极简布局会把三种密度设置全部压成 `compact`**，连设成「图标」也一样。
+> 所以极简布局下：看不到任何**简介**（`.bm-desc` 只在 `normal` 密度渲染）、
+> 也看不到图标密排。这不是 bug，是极简布局的定位（高密度列表），
+> 但它**静默覆盖了用户的设置** —— 排查「我的简介怎么不见了」时先看这里。
+> `desc-matrix.mjs` 里专门有一条断言钉住它（`minimal` 的 9 个组合必须全是 `compact`），
+> 以及反向的一条（`grid` / `drawer` 必须尊重设置，不许有意外覆盖）。
+
 ### 顶部信息栏
 
 - 实时时钟 + 日期
@@ -204,11 +213,19 @@ import { storage, useCloudStorage, useLocalStorage } from '@/data/storage'
 > （「· 需 Chrome」约 163px、「（仅 Chrome/Edge）」约 221px）都会被**静默截断成「…」**。
 > 那天把 `.bm-desc` 放开成两行（见「待办」），才腾出空间。
 >
+> ⚠️ **这条提示只在「看得到简介」的组合里可见**：需要 **grid / drawer 布局 +
+> normal 密度**（`.bm-desc` 只在 `normal` 密度渲染，而 `minimal` 布局会把密度
+> 强制压成 compact —— 见「功能清单 → 导航主页」末尾那条）。默认设置正好是
+> grid + normal，所以默认就能看到。
+>
 > ⚠️ **编辑模式下仍然看不全**：`.bm-actions`（编辑/删除两个按钮，50px）是在流里的，
 > 加上它多带出来的一个 12px flex gap，一共吃掉 62px，`.bm-text` 只剩 **71.2px**，
 > 这句要占 4 行 → 被 clamp 到 2 行。这不是 bug ——
 > 悬停提示框（`max-width: 280px`）里是完整的。
-> 顺带一提：拖拽手柄 `.bm-grip` 是 `position: absolute`，**一点宽度都不占**，
+> ⚠️ 但 **`mac` 卡片风格不受这个挤压**：`.bm-card.mac .bm-actions` 是
+> `position: absolute`，编辑模式下 `.bm-text` 仍有 **191.2px**，这句 1 行就放得下。
+> 也就是说「编辑模式看不全」只发生在 `default` / `neumorphic` 两种风格上。
+> 顺带一提：拖拽手柄 `.bm-grip` 也是 `position: absolute`，**一点宽度都不占**，
 > 算可用宽度时别把它减进去（这个数我一开始算错过）。
 > `desc-verify.mjs` 的【H】组专门钉住了 71.2px 这个值，哪天编辑模式不再挤压会报红。
 
@@ -855,6 +872,33 @@ LAYOUT=grid DENSITY=icon STYLE=mac node drag-probe.mjs http://127.0.0.1:5199/jer
 
       验收：`desc-verify.mjs` **43 / 0**（含一条**故意断言「编辑模式下确实
       被截断」**的已知限制，哪天编辑模式不再挤压它会红，提示去划掉这条）。
+
+      **跨组合的矩阵验证：`desc-matrix.mjs`（260 条断言）。**
+      `desc-verify.mjs` 只在 `grid / normal / default` 一个组合下跑过，而组件里
+      针对卡片风格的覆盖规则（`.bm-card.mac .bm-text{width:100%}`、
+      `.bm-card.mac .bm-name{font-size:12px}`、`.bm-card.mac .bm-actions` 是
+      `absolute`）都可能在别的组合里把旧规则带回来 ——
+      所以补了一个 3 布局 × 3 密度 × 3 风格 = **27 个组合**的矩阵，每个组合都验
+      line-clamp / 不是 nowrap / 不是 ellipsis / `overflow-wrap:break-word` /
+      长串不横向溢出 / 超行有省略号。dev / dist 子路径 / 线上均 **260 / 0**。
+
+      写这个矩阵时**又踩了两次自己的坑**，都记在脚本注释里：
+      1. **假设了 `density` 设置会被尊重** —— 结果 `minimal` 布局强制 compact，
+         于是「找不到 `.bm-desc`」满屏假红。正解是**从 DOM 读实际生效的密度**
+         （卡片上的 `density-*` 类），并把「desc 只在 normal 存在」本身当成断言。
+      2. **用 `scrollWidth` 判「文字有没有横向溢出」** —— `drawer/normal/mac` 下
+         `.bm-name` 报 `scrollW 237 / clientW 234`，但用 `Range` 量出**每一行**
+         都 ≤ 227.9px，文字根本没溢出，那 3px 是 Chromium 在
+         「`-webkit-line-clamp` + `text-align:center`」下的读数怪癖。
+         正解是断言**文字实际占据的宽度**（`Range.getClientRects()` 的最大宽度）。
+      3. 顺带一条：四张测试卡的**名字必须唯一**，否则 `find` 会撞车 ——
+         上一版用「串口助手」当锚点，两张同名卡直接找错。
+
+      **矩阵脚本带一个 `BREAK=1` 模式**：注入
+      `.bm-name, .bm-desc { overflow-wrap: normal !important }`（= 长串被硬切那个
+      既有 bug 的状态），整套应当成片报红。实测 **63 条报红**，其中
+      `maxLineRect 2428.6 / clientW 133`、`长描述行数超出 clamp ⟹ 画省略号 16 / 16`
+      —— 证明这两条断言真的能抓到那个退步。
 - [x] **顺手把 b22（串口助手）那条提示写进了卡片描述**（2026-09-27）。
       它依赖 Web Serial API，**只有 Chromium 系能开串口**。原来加不了后缀，
       因为 `.bm-desc` 单行时「在线串口调试与固件升级」已占 126.5px / 可用
