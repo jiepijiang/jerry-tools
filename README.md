@@ -1016,6 +1016,139 @@ const all = supabaseConfigured
 
 ---
 
+## 写失败审计（写不进去，却报「成功」）
+
+### 这轮是怎么找到的
+
+前一轮的审计角度是「**设置项是不是真的生效**」，挖出了孤儿书签那个真 bug。
+这轮换一个同样系统的角度：**所有会写盘的操作，写失败时有没有被吞掉、然后照样报成功。**
+
+判据是**违约**，不是设计取舍 —— `src/data/storage.js` 表头白纸黑字写着契约：
+
+> `write(key, value) -> boolean`，**写失败返回 false，调用方据此回滚**。
+
+### 手法：故障注入，而不是「真把 localStorage 塞满」
+
+把 `Storage.prototype.setItem` 换成一个会抛 `QuotaExceededError` 的版本
+（配额满 / 隐私模式 / 站点数据被禁，都是真会发生的），然后逐条走所有会写盘的路径。
+
+⚠️ **不能靠「真的把配额塞满」**：清空类操作写的是 `[]`，**比原值小**，
+配额满也照样写得进去 —— 这条路径根本测不出来。
+
+### 实测结果
+
+探针：`/tmp/jerry-sb/write-fail-audit.mjs`，9 个场景（新增 / 编辑 / 删除书签、
+删除分类、拖拽移动、设置面板「清除分类」/「清除所有书签」、恢复备份、改设置项）。
+
+| 阶段 | 结果 |
+| --- | --- |
+| 修复前（旧版探针 26 条） | **19 / 7** |
+| 修复后（当前探针 29 条） | **29 / 0** |
+
+**有价值的负面结论**：`withRollback` 保护的那 5 条路径（新增 / 编辑 / 删除书签、
+删除分类、拖拽移动）**全部正确报失败并回滚**，一条都没坏。所以问题不在
+「没人想过要处理写失败」，而在**个别路径漏了**。
+
+### 修掉的 3 处真 bug
+
+1. **设置面板「清除分类」/「清除所有书签」** —— 两条 `storage.write` 的返回值
+   直接丢掉，无条件报「清除完成」。内存清空了、界面看着是清的、**存储里其实还在**，
+   刷新一次数据全回来。
+2. **改设置项** —— `setSetting` → `persist()` 的返回值被丢，**零提示**。
+   用户切了深色主题、看着生效了，刷新又变回去，全程没有任何反馈。
+   模板里还有一处 `@click="resetSettings(); toast(t('toast.saved'))"` ——
+   不 await、也不看返回值，无条件报「已保存」。
+3. **恢复备份（后果最重）** —— `localStorageAdapter.writeAll` 是
+   `for (key) safeRemove(key)` 再 `for (key) safeSet(key)`，两个问题叠在一起：
+
+   - `safeSet` 的返回值被丢掉 → 写失败也返回 `true` → 上层（**明明检查了返回值**）
+     报「恢复完成」；
+   - **`set` 失败时原值已经被 `remove` 掉了** → 用户的分类 / 书签 / 设置直接没了。
+     刷新后 `seedIfEmpty()` 看到空存储，还会把种子灌回来。
+
+   实测：**3 条书签 → 变成 22 条种子**，而 toast 说的是「恢复完成」。
+   用户视角是「我恢复了个备份，结果回到默认数据了」。
+
+### 修法
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/data/storage.js` | `writeAll` 去掉「先 remove」、逐个检查 `safeSet` 返回值、**第一个失败就中止** |
+| `src/components/SettingsPanel.vue` | 两处清除加返回值检查 + 内存回滚 + 如实报失败；`pick()` / 新增 `toggle()` / `doResetSettings()` 失败时提示 |
+| `src/composables/useSettings.js` | `setSetting` / `setSettings` 失败时**回滚内存**（含 `data-*` 属性）并返回 boolean |
+| `src/composables/useAuth.js` | `transferLocalToCloud` 检查每一张表的写入结果，返回 `reason: 'write_failed'` |
+| `src/data/i18n.js` | 新增 `toast.uploadLocalFail`（中英） |
+
+两条设计说明：
+
+- **`setItem` 对已存在的键本来就是原子覆盖，不需要先 `remove`。**
+  去掉 remove 之后，「写失败」最多是「恢复了一半」，**绝不会把没写进去的键抹掉**。
+  云端那份 `writeAll` 一直是这么写的（先写、逐个检查、不删），这里跟它对齐 ——
+  两边不对称本身就是信号。
+- **仍然做不到原子**：配额满时前面的键可能已经写进去了。所以第一个失败就中止并
+  返回 false，让调用方**如实报失败**。做不到原子就老实说，别假装成功。
+
+### ⚠️ 探针自己踩的三个坑（一个比一个阴）
+
+1. **场景 8 是假绿。** `onRestoreFile` 成功后原代码会
+   `setTimeout(() => location.reload(), 500)`。当时底层谎报成功 → 走了「成功」分支
+   → toast 说「恢复完成」→ reload 把 toast 冲掉 → 探针读到**空数组** →
+   「写失败时不出现『恢复完成』」**恒为真**。
+
+   拦 reload 走不通：`Location.prototype.reload` 赋值**静默失败**
+   （实例上是 unforgeable 属性），`defineProperty(window.location, 'reload', …)`
+   直接抛 `Cannot redefine property`。
+   改成**让日志活过 reload**：toast 记一份到 `window.name`（同一标签页里唯一
+   跨导航存活、且**不碰 Storage** 的地方 —— 不碰 Storage 是硬要求，
+   故障注入期间 `setItem` 是会抛的）。另外用「文档代号」判重载：
+   init script 往 `sessionStorage` 里自增一个计数，**只有真 reload 才会让它变**。
+
+   ⚠️ 别用 `page.on('framenavigated')` 判重载 —— vue-router 的 `pushState`
+   也会触发它，分不清「换路由」和「重载」。
+
+2. **观察器根本没装上，而且是静默的。** 原写法是
+   `observe(document.documentElement, …)`，但 init script 在
+   `readyState === 'loading'` 时执行，此时 `document.documentElement` **还是 `null`**
+   → 抛 `parameter 1 is not of type 'Node'` → 整个 IIFE 挂掉。
+   后果极阴：日志永远为空，而 `toasts()` 会**退化成正读实时 DOM** ——
+   所有「不出现成功文案」的断言看起来照常绿，**只有在页面被 reload 之后才暴露成假绿**。
+
+   → 改成 `observe(document, …)`，并在 `withFault()` 里加**硬自检**：
+   观察器没装上就**直接抛错、整轮作废**，不允许静默降级。
+
+3. **一条弱断言。** 场景 5 的「存储里的顺序没变」只比了名字顺序，
+   但拖拽改的是 `categoryId`，书签在数组里**可能原地不动** ——
+   造红时实测：BREAK 下拖拽真的成功了，这条断言照样绿。
+   → 加了一条判 `categoryId` 归属的断言（`甲一: cat_a → cat_b` 立刻报红），
+   弱的那条留着当第二层保险。
+
+### 造红
+
+`BREAK=1` → **不注入故障**。写盘全部成功，于是「写失败时不许报成功」这一类断言
+集体变红。实测 **3 绿 / 26 红**（共 29 条）。
+
+三条绿都有明确原因，不是漏网：
+
+| 绿的那条 | 为什么该绿 |
+| --- | --- |
+| 拖拽移动：存储里的顺序没变 | **已知弱断言**，有效判据是旁边那条「归属没变」 |
+| 恢复备份：探针确实读到了 toast | **探针自检**，本来就该一直绿 |
+| 设置项：写失败时不出现任何「已保存」类成功文案 | **条件式断言**：没故障就没有写失败，前提不成立 |
+
+### 遗留
+
+- **`useAuth.transferLocalToCloud` 只做了静态修正，没有动态验证。**
+  探针要求登录态（`pushLocalToCloud` 先判 `isCloudActive()`），当前夹具跑不到这条。
+  改动与其余三处同构，但**别当成已验证**。
+- **调用点已全量核对过**（`grep -rn "storage\.\(write\|writeAll\|remove\)" src/`），
+  共 **9 处**调用点、分布在 4 个文件：`useStore` 的 `withRollback`（1）、
+  `useAuth` 的三表写入（3）、`useSettings.persist`（1）、
+  `SettingsPanel` 的 `writeAll` + 两处清除（4）。
+  除 `useAuth` 那 3 处外都有动态覆盖。留言（notes）走的是 `withRollback`，
+  与书签同一条路径，不需要单独场景。
+
+---
+
 ## 待办
 
 - [x] 接 Supabase：账号体系、跨设备同步、分享页、网站审核真正落库
@@ -1241,3 +1374,26 @@ const all = supabaseConfigured
       看着像**这次的改动把描述排版弄坏了**。已用 `pin-seed-version.py` 统一补上
       （`e2e.mjs` 读真实 localStorage、`seed-b22-*.mjs` 专门量 b22，这两类排除）。
       **判据：把报红断言里的数字和夹具实际塞的条数对一下，对不上就是污染，不是回归。**
+- [x] **写失败审计：写不进去却报「成功」**（2026-09-27）。
+      换了个系统性角度审计 ——「所有写盘操作的失败有没有被吞掉、然后照样报成功」，
+      用故障注入（`Storage.prototype.setItem` 抛 `QuotaExceededError`）跑出 **19 / 7**。
+      挖到 3 处真 bug，最重的是**恢复备份会毁数据**：`writeAll` 先 `remove` 再 `set`
+      且吞掉返回值 → 写失败时**原值已被删掉**、toast 还说「恢复完成」，
+      实测 3 条书签 → 22 条种子。详见「写失败审计」一节。
+
+      **有价值的负面结论**：`withRollback` 保护的 5 条路径全部正确回滚 ——
+      问题不在「没人想过要处理写失败」，而在**个别路径漏了**。
+
+      ⚠️ 探针自己踩了三个坑，一个比一个阴：
+      1. **场景 8 假绿** —— `location.reload()` 把 toast 冲掉，读到空数组，
+         「不出现『恢复完成』」恒为真。拦 reload 不可行（实例上是 unforgeable
+         属性），改成把日志写进 `window.name` 让它活过 reload + 用文档代号判重载。
+      2. **观察器静默没装上** —— init script 执行时 `document.documentElement`
+         还是 `null`，`observe(document.documentElement, …)` 直接抛，
+         于是所有断言**退化成实时 DOM 读**，只有页面被 reload 之后才暴露成假绿。
+         改成 `observe(document, …)` + **硬自检**（装不上就抛错，不允许静默降级）。
+      3. **一条弱断言** —— 「存储里的顺序没变」在拖拽成功时也成立（拖拽改的是
+         `categoryId`，数组顺序可能原地不动），造红时才看出来。
+
+      造红：`BREAK=1`（不注入故障）实测 **3 绿 / 26 红**，三条绿分别是
+      已知弱断言、探针自检、条件式断言 —— 逐条对过，不是漏网。

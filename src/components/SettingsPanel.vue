@@ -60,12 +60,36 @@ watch(
 const topLevelCount = computed(() => state.categories.filter((c) => !c.parentId).length)
 const gridLocked = computed(() => topLevelCount.value > 10)
 
+/**
+ * 改一项设置。
+ *
+ * ⚠️ `setSetting` 会**返回是否落盘成功**，失败时它自己已经把内存值回滚了。
+ *    这里必须把失败如实说出来 —— 否则用户切了主题、看着生效、刷新又变回去，
+ *    全程零提示。实测：`/tmp/jerry-sb/write-fail-audit.mjs` 场景 9。
+ */
 async function pick(key, value) {
   if (key === 'layout' && value === 'grid' && gridLocked.value) {
     toast(t('layout.gridLockedHint'), 'warning')
     return
   }
-  await setSetting(key, value)
+  if (!(await setSetting(key, value))) toast(t('toast.saveFail'), 'error')
+}
+
+/** 给 `@change` 用的薄包装：失败时提示（勾选框会自动弹回，因为绑的是 settings）。 */
+async function toggle(key, value) {
+  if (!(await setSetting(key, value))) toast(t('toast.saveFail'), 'error')
+}
+
+/**
+ * 恢复默认设置。
+ *
+ * ⚠️ 原来模板里写的是 `@click="resetSettings(); toast(t('toast.saved'))"` ——
+ *    **不 await、也不看返回值**，无条件报「已保存」。落盘失败时会一边回滚
+ *    一边告诉用户保存成功了。现在等结果再报。
+ */
+async function doResetSettings() {
+  const ok = await resetSettings()
+  toast(ok ? t('toast.saved') : t('toast.saveFail'), ok ? 'success' : 'error')
 }
 
 function ask(title, text, action) {
@@ -170,12 +194,20 @@ async function doUploadLocal() {
         return
       }
       // 失败原因逐条说清楚，别只丢一个「失败」
+      /*
+       * ⚠️ 最后一个分支是「其余一切」，包括 `write_failed`（云端没写进去）。
+       *    把它归到「本机没有可上传的新数据」是**在说假话** ——
+       *    用户会以为数据早就在云上了，其实一条都没上去。
+       *    `write_failed` 要单独说，并明确「本机数据还在」。
+       */
       const key =
         res.error === 'not_logged_in'
           ? 'toast.uploadLocalNeedLogin'
           : res.error === 'no_cloud'
             ? 'toast.uploadLocalNoCloud'
-            : 'toast.uploadLocalNothing'
+            : res.error === 'write_failed'
+              ? 'toast.uploadLocalFail'
+              : 'toast.uploadLocalNothing'
       toast(t(key), 'warning')
     } finally {
       cloudUploading.value = false
@@ -217,20 +249,44 @@ async function onRestoreFile(e) {
   }
 }
 
+/**
+ * 清除全部分类。
+ *
+ * ⚠️ 这里**必须检查写盘结果并回滚**（原来两条都写了、返回值直接丢掉，
+ *    写失败也照样报「清除完成」）：
+ *    内存已经清空了，界面看着是清的，存储里其实还在 ——
+ *    刷新一次数据全回来，用户完全不知道刚才发生了什么。
+ *    同一类问题在 `restore` 那边修过（见 storage.js 的注释），
+ *    但只修了那一条路径。探针：`/tmp/jerry-sb/write-fail-audit.mjs` 场景 6。
+ */
 async function clearCategories() {
   ask(t('settings.clearCategories'), t('settings.clearCategoriesConfirm'), async () => {
+    const prevCats = state.categories
+    const prevBms = state.bookmarks
     state.categories = []
-    await storage.write(storageKeys.categories, [])
+    const ok1 = await storage.write(storageKeys.categories, [])
     state.bookmarks = state.bookmarks.map((b) => ({ ...b, categoryId: null }))
-    await storage.write(storageKeys.bookmarks, state.bookmarks)
+    const ok2 = await storage.write(storageKeys.bookmarks, state.bookmarks)
+    if (!ok1 || !ok2) {
+      state.categories = prevCats
+      state.bookmarks = prevBms
+      toast(t('toast.clearFail'), 'error')
+      return
+    }
     toast(t('toast.clearOk'))
   })
 }
 
+/** 清除全部书签。同上，写失败必须回滚并如实报失败。 */
 async function clearBookmarks() {
   ask(t('settings.clearBookmarks'), t('settings.clearBookmarksConfirm'), async () => {
+    const prev = state.bookmarks
     state.bookmarks = []
-    await storage.write(storageKeys.bookmarks, [])
+    if (!(await storage.write(storageKeys.bookmarks, []))) {
+      state.bookmarks = prev
+      toast(t('toast.clearFail'), 'error')
+      return
+    }
     toast(t('toast.clearOk'))
   })
 }
@@ -468,7 +524,7 @@ async function copyShare() {
                 <input
                   type="checkbox"
                   :checked="settings.showFavoritesUnderSearch"
-                  @change="setSetting('showFavoritesUnderSearch', $event.target.checked)"
+                  @change="toggle('showFavoritesUnderSearch', $event.target.checked)"
                 />
               </label>
               <label class="toggle">
@@ -479,7 +535,7 @@ async function copyShare() {
                 <input
                   type="checkbox"
                   :checked="settings.showBookmarkTooltip"
-                  @change="setSetting('showBookmarkTooltip', $event.target.checked)"
+                  @change="toggle('showBookmarkTooltip', $event.target.checked)"
                 />
               </label>
               <label class="toggle">
@@ -490,7 +546,7 @@ async function copyShare() {
                 <input
                   type="checkbox"
                   :checked="settings.editMode"
-                  @change="setSetting('editMode', $event.target.checked)"
+                  @change="toggle('editMode', $event.target.checked)"
                 />
               </label>
               <label class="toggle">
@@ -501,7 +557,7 @@ async function copyShare() {
                 <input
                   type="checkbox"
                   :checked="settings.weatherAnimation"
-                  @change="setSetting('weatherAnimation', $event.target.checked)"
+                  @change="toggle('weatherAnimation', $event.target.checked)"
                 />
               </label>
             </div>
@@ -642,7 +698,7 @@ async function copyShare() {
           </div>
 
           <div class="group">
-            <button class="btn-ghost" @click="resetSettings(); toast(t('toast.saved'))">
+            <button class="btn-ghost" @click="doResetSettings">
               <AppIcon name="RefreshCw" :size="15" />{{ t('common.reset') }}
             </button>
           </div>

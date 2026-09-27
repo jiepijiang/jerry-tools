@@ -79,28 +79,52 @@ export async function initSettings() {
   }
 }
 
-/** 改一个或多个设置项。 */
+/**
+ * 改一个或多个设置项。**返回是否真的落盘成功。**
+ *
+ * ⚠️ 写失败时必须把内存改回去 —— 否则界面显示的是一个**没落盘的值**：
+ *    用户切了深色主题、看着生效了，刷新一次又变回浅色，全程没有任何提示。
+ *    契约来自 `storage.write`（失败返回 false），调用方据此提示。
+ *    实测：`/tmp/jerry-sb/write-fail-audit.mjs` 场景 9。
+ *
+ * `themeMode` / `accent` 还额外改了两个 `data-*` 属性，回滚时要一起还原，
+ * 否则 DOM 上的主题属性和 `settings` 对象会对不上。
+ */
 export async function setSetting(key, value) {
-  if (!(key in defaultSettings)) return
+  if (!(key in defaultSettings)) return false
+  const prev = settings[key]
   settings[key] = value
   if (key === 'themeMode') applyThemeAttr()
   if (key === 'accent') applyAccentAttr()
-  await persist()
+  const ok = await persist()
+  if (!ok) {
+    settings[key] = prev
+    if (key === 'themeMode') applyThemeAttr()
+    if (key === 'accent') applyAccentAttr()
+  }
+  return ok
 }
 
-/** 批量改。 */
+/** 批量改。语义同 setSetting —— 失败整批回滚。 */
 export async function setSettings(patch) {
-  for (const [k, v] of Object.entries(patch)) {
-    if (k in defaultSettings) settings[k] = v
-  }
+  const keys = Object.keys(patch).filter((k) => k in defaultSettings)
+  if (!keys.length) return false
+  const prev = Object.fromEntries(keys.map((k) => [k, settings[k]]))
+  for (const k of keys) settings[k] = patch[k]
   applyThemeAttr()
   applyAccentAttr()
-  await persist()
+  const ok = await persist()
+  if (!ok) {
+    for (const k of keys) settings[k] = prev[k]
+    applyThemeAttr()
+    applyAccentAttr()
+  }
+  return ok
 }
 
-/** 恢复默认。 */
+/** 恢复默认。返回是否落盘成功。 */
 export async function resetSettings() {
-  await setSettings({ ...defaultSettings })
+  return setSettings({ ...defaultSettings })
 }
 
 /** 主题模式的循环切换（点一下就换下一个）。 */

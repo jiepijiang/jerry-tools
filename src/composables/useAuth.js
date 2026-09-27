@@ -146,11 +146,27 @@ export async function transferLocalToCloud(mode = 'fill') {
   const plan = planTransfer(cloud, local)
   if (!plan.changed) return { changed: false, reason: 'nothing_new', plan }
 
-  // 逐表写。`storage.write` 在云端是「整表 diff」语义，
-  // 传进去的数组就是这张表的目标状态 —— 所以必须传合并后的 rows。
-  if (plan.categories.changed) await storage.write(storageKeys.categories, plan.categories.rows)
-  if (plan.bookmarks.changed) await storage.write(storageKeys.bookmarks, plan.bookmarks.rows)
-  if (plan.notes.changed) await storage.write(storageKeys.notes, plan.notes.rows)
+  /*
+   * 逐表写。`storage.write` 在云端是「整表 diff」语义，
+   * 传进去的数组就是这张表的目标状态 —— 所以必须传合并后的 rows。
+   *
+   * ⚠️ **必须检查每一张表的返回值。** 原来这里三条 `await storage.write(...)`
+   *    的返回值全丢了，函数无条件返回 `{changed: true}` ——
+   *    于是 RLS 拒绝 / 网络失败 / 令牌过期时，`pushLocalToCloud` 照样返回
+   *    `{ok: true}`，设置面板报「已上传：新增 N 条书签」，紧接着 `location.reload()`
+   *    从云端重读（那边**根本没有**刚"上传"的数据），用户看到的是书签又没了。
+   *    同一类问题在 `restore` 那边修过（storage.js 的注释里有原话），
+   *    但没顺着往下查这条路径。
+   *
+   *    ⚠️ 探针 `write-fail-audit.mjs` **没覆盖这条** —— 它要求登录态
+   *    （`pushLocalToCloud` 先判 `isCloudActive()`）。这里只做了静态修正，
+   *    改动本身与其余三处同构，但**没有动态验证**，别当成已验证。
+   */
+  const results = []
+  if (plan.categories.changed) results.push(await storage.write(storageKeys.categories, plan.categories.rows))
+  if (plan.bookmarks.changed) results.push(await storage.write(storageKeys.bookmarks, plan.bookmarks.rows))
+  if (plan.notes.changed) results.push(await storage.write(storageKeys.notes, plan.notes.rows))
+  if (results.some((ok) => ok === false)) return { changed: false, reason: 'write_failed', plan }
 
   return { changed: true, plan }
 }

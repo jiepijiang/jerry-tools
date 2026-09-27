@@ -95,13 +95,39 @@ export const localStorageAdapter = {
    * 键名用 normalizeStorageKey 归一化，所以 `categories` 和 `jt:categories`
    * 两种写法都能恢复 —— 兼容用户手里已经导出的旧文件。
    *
-   * 返回值：false 表示「这份快照用不了」，调用方应当据此提示失败。
+   * 返回值：false 表示「这份快照没写成功」，调用方应当据此提示失败。
+   *
+   * ⚠️⚠️ **不能「先 remove 再 set」，也不能吞掉 `safeSet` 的返回值。**
+   *    原来的写法是 `for (key) safeRemove(key)` 再 `for (key) safeSet(key)`，
+   *    两个问题叠在一起，后果比「恢复失败」严重得多：
+   *      1. `safeSet` 的返回值被丢掉 → 写失败也返回 `true` →
+   *         上层（SettingsPanel 明明检查了返回值）报「恢复完成」；
+   *      2. **`set` 失败时原值已经被 `remove` 掉了** → 用户的分类 / 书签 /
+   *         设置直接没了，界面上却写着「恢复完成」。刷新后 `seedIfEmpty()`
+   *         看到空存储，还会把种子灌回来 —— 用户看到的是
+   *         「我恢复了个备份，结果回到默认数据了」。
+   *    实测（注入 `QuotaExceededError`，`/tmp/jerry-sb/write-fail-audit.mjs` 场景 8）：
+   *    3 条书签 → 变成 **22 条种子**，且 toast 是「恢复完成」。
+   *
+   *    `setItem` 对已存在的键本来就是**原子覆盖**，不需要先删。
+   *    去掉 remove 之后，「写失败」最多是「恢复了一半」，
+   *    **绝不会把没写进去的键抹掉**。云端那份 `writeAll` 一直是这么写的
+   *    （先写、逐个检查返回值、不删），这里跟它对齐。
+   *
+   *    仍然做不到原子：配额满时前面的键可能已经写进去了。
+   *    所以第一个失败就**中止**并返回 false，让调用方如实报失败。
    */
   async writeAll(snapshot) {
     const clean = normalizeSnapshot(snapshot)
     if (!clean) return false
-    for (const key of Object.keys(clean)) safeRemove(key)
-    for (const [key, value] of Object.entries(clean)) safeSet(key, value)
+    for (const [key, value] of Object.entries(clean)) {
+      // `undefined` 在快照里表示「这个键置空」，交给 remove
+      if (value === undefined) {
+        safeRemove(key)
+        continue
+      }
+      if (!safeSet(key, value)) return false
+    }
     return true
   },
 

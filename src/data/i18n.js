@@ -362,6 +362,9 @@ export const messages = {
     'toast.uploadLocalNothing': '本机没有可上传的新数据',
     'toast.uploadLocalNeedLogin': '请先登录，再上传本机数据',
     'toast.uploadLocalNoCloud': '没有配置云端，本机数据无法上传',
+    // 「写进云端时失败」要单独说，别混进「本机没有可上传的新数据」——那是假话，
+    // 而且用户最关心的是「本机数据还在不在」。
+    'toast.uploadLocalFail': '上传失败，本机数据没有改动',
     'toast.favOk': '收藏成功',
     'toast.favFail': '收藏失败',
     'toast.favRemoved': '已取消收藏',
@@ -729,6 +732,7 @@ export const messages = {
     'toast.uploadLocalNothing': 'Nothing new to upload from this device',
     'toast.uploadLocalNeedLogin': 'Sign in first, then upload this device’s data',
     'toast.uploadLocalNoCloud': 'Cloud is not configured, cannot upload',
+    'toast.uploadLocalFail': 'Upload failed — this device’s data is untouched',
     'toast.favOk': 'Saved',
     'toast.favFail': 'Could not save',
     'toast.favRemoved': 'Removed',
