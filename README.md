@@ -213,10 +213,12 @@ import { storage, useCloudStorage, useLocalStorage } from '@/data/storage'
 > （「· 需 Chrome」约 163px、「（仅 Chrome/Edge）」约 221px）都会被**静默截断成「…」**。
 > 那天把 `.bm-desc` 放开成两行（见「待办」），才腾出空间。
 >
-> ⚠️ **这条提示只在「看得到简介」的组合里可见**：需要 **grid / drawer 布局 +
+> ⚠️ **「卡片上」这条提示只在「看得到简介」的组合里可见**：需要 **grid / drawer 布局 +
 > normal 密度**（`.bm-desc` 只在 `normal` 密度渲染，而 `minimal` 布局会把密度
 > 强制压成 compact —— 见「功能清单 → 导航主页」末尾那条）。默认设置正好是
 > grid + normal，所以默认就能看到。
+> 其它组合下这句仍然**可达** —— 悬停提示框里给的是完整原文（2026-09-27 修好，
+> 之前 compact / icon 密度下**卡片和提示框都看不到**，见「悬停提示框」一节）。
 >
 > ⚠️ **编辑模式下仍然看不全**：`.bm-actions`（编辑/删除两个按钮，50px）是在流里的，
 > 加上它多带出来的一个 12px flex gap，一共吃掉 62px，`.bm-text` 只剩 **71.2px**，
@@ -336,6 +338,75 @@ supabase/                后端（建表 / 迁移 / 种子 / 验证），操作�
 
 > 浏览器定位要求**安全上下文**：必须是 HTTPS 或 `localhost` / `127.0.0.1`。
 > GitHub Pages 是 HTTPS，满足条件；用 `file://` 直接打开 dist 则不会弹窗。
+
+### 悬停提示框
+
+参考站的提示框只在「看得到简介」的密度下才有意义，这里做了两处修正（2026-09-27）。
+
+**① 提示框不该按密度门控（真 bug）。** 原来 `BookmarkCard.vue` 的 `showTooltip` 写的是
+
+```js
+settings.showBookmarkTooltip && density.value === 'normal' && !!props.bookmark.description
+```
+
+而 `.bm-desc` 本身也只在 `normal` 密度渲染（模板里 `v-if="density === 'normal'"`）。
+两处一叠加，**compact / icon 密度下简介彻底不可达** —— 卡片上没有，悬停也不出。
+实测 18 个「布局 × 密度 × 卡片风格」组合里只有 **4 个**（grid / drawer + normal）
+能出提示框，其余 **14 个**看不到简介的任何一个字。
+
+那个 `density === 'normal'` 是「补上书签排列设置」那次重构（`c678832`）的**副作用**：
+原本大概是 `!props.compact`（两值），改成 normal/compact/icon 三值枚举后被直译成
+`=== 'normal'`，顺带把新加的 icon 密度也一起关掉了 —— 提交信息里只字未提，
+是 `git log -S` 查出来的。
+
+修法是去掉密度门控。提示框的职责恰恰是**揭示卡片放不下的东西**，
+所以卡片显示得越少它越该出现：compact 只有名称、icon 连名称都没有。
+
+保留 `!!description` —— 种子里 24 条书签全都有简介，实际不影响演示数据。
+**已知遗留边界**：icon 密度 + 用户自己新增的、没填简介的书签仍然悬停无反应
+（那种情况下连名称都看不到）。`tooltip-probe.mjs` 里有一条断言专门钉住它。
+
+**② 提示框会伸出视口（既有 bug，一并修掉）。** 提示框是 `left:50%` +
+`translateX(-50%)` 居中在卡片上的，而它是 `width: max-content`（最宽 280px）——
+卡片越窄、离视口边缘越近，两头就越容易伸到视口外被切掉。实测：
+
+| 场景 | 首卡提示框 `left` |
+| --- | --- |
+| 1440 宽 + `drawer` + icon 密度 | **-39**（icon 卡片只有 ~66px 宽） |
+| 375 宽 + `grid` + normal 密度 | **-43** |
+
+第二行说明这**不是新引入的** —— 窄视口下 normal 密度早就溢出了，只是没人量过；
+放开 icon 密度的提示框之后才变得显眼。
+
+修法：新增 `clampTooltip()`，在 `@mouseenter` 时量一次、把偏移量写进 `--tip-shift`
+（改 `transform`，**不改 `left`**）。两个细节：
+- 必须先把当前偏移量减掉再量，否则每次悬停都在已有偏移上再叠一次、越推越远；
+- 别改成用 `left` 做偏移 —— `left` 一变，用 `getBoundingClientRect()` 反推
+  「没偏移时的位置」就没法算了。
+
+在 `mouseenter` 里算而不是常驻监听：位置只跟布局有关，每次悬停重算一次就够，
+也不用挂 resize / scroll 监听。
+
+**验收：`tooltip-probe.mjs`（329 条断言）。** A 段 18 个组合都要有提示框；
+B 段简介必须可达（卡片上或提示框里至少一处）；C 段几何（在视口内 / 不被遮挡 /
+给的是完整简介）；D 段 4 个视口宽度 × 5 个组合的首卡 + 末卡水平夹取。
+dev / dist 子路径 / 线上均 **329 / 0**。
+`BREAK=1` 模式（把 `--tip-shift` 按死成 0）实测 **17 条报红**，
+其中 `vw=375 grid/normal 首卡 left -43`、`vw=1440 drawer/icon 首卡 left -39`
+正是上表那两个数字 —— 证明断言真能抓到溢出。
+
+写这个探针时踩了三个坑，都记在脚本注释里：
+1. **`.bm-tooltip` 有 `pointer-events: none`**（故意的，免得挡住点击），
+   于是 `elementFromPoint` **永远返回它底下的元素**，「有没有被盖住」满屏假红。
+   要在 `evaluate` 内部临时改内联样式、测完立刻还原。
+   ⚠️ **别用 `addStyleTag` 全局注入 `pointer-events: auto`** —— 那是**永久生效**的，
+   提示框反过来挡住卡片，下一次 `hover()` 会一直重试直到超时（第一版就这么挂的）。
+2. **`card.textContent` 会把提示框自己的文字算进来**（提示框是卡片的子元素），
+   于是「卡片上有没有简介」永远报「有」。要只取 `.bm-name` / `.bm-desc`。
+3. **造红开关要覆盖到每一条相关断言。** 第一版 `BREAK=1` 只在公共的 `load()` 里
+   注入样式，而 D 段是自己建 context 的（不走 `load`），于是 D 段在 BREAK 模式下
+   照样全绿 —— 差点误判成「D 段的断言是真的」。凡是造红开关，
+   一定要确认它作用到了**每一条**相关断言上。
 
 ### 其它
 
@@ -914,3 +985,18 @@ LAYOUT=grid DENSITY=icon STYLE=mac node drag-probe.mjs http://127.0.0.1:5199/jer
       所以老用户看到的还是旧文案，**这是设计如此、不是没生效**；
       想验证请用隐私窗口或先清 localStorage。
       （线上是云端模式，登录后书签以 Supabase 为准，seed 只影响未登录访客。）
+- [x] **修掉悬停提示框的两处缺陷**（2026-09-27，详见「与参考站的已知差异 → 悬停提示框」）。
+      ① **真 bug**：`showTooltip` 被 `density === 'normal'` 门控，而 `.bm-desc` 也只在
+      normal 渲染 → compact / icon 密度下**简介彻底不可达**（18 组合只有 4 个能出框）。
+      这个门控是「补上书签排列设置」那次重构（`c678832`）的副作用，`git log -S` 定位。
+      ② **既有 bug**：提示框 `width:max-content` + 居中，窄卡片 / 窄视口下伸出视口
+      （375px 下首卡 `left -43`、1440 + drawer/icon 下 `left -39`）。
+      新增 `clampTooltip()` + `--tip-shift` 水平夹取，一次解决两处。
+
+      这件事的**方法论**值得记一笔：它**不是**从「用户反馈」来的，而是从
+      `desc-matrix.mjs` 的矩阵结论（「compact / icon 密度下卡片不显示简介」）
+      顺着追问「那这两个密度下简介去哪儿看？」推出来的。
+      一个维度量清楚了，往往就能照出隔壁维度的洞。
+
+      验收：`tooltip-probe.mjs`（329 条），dev / dist 子路径 / 线上均 **329 / 0**；
+      `BREAK=1` 故意造红 **17 条**（含 `-43` / `-39` 两个实测数字）。

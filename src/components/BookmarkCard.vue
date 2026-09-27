@@ -54,9 +54,72 @@ const iconSrc = computed(() => faviconOf(props.bookmark.url, props.bookmark.icon
 /** 实际生效的排列密度。极简布局会强制压到 compact。 */
 const density = computed(() => (props.dense ? 'compact' : settings.density))
 
+/**
+ * 悬停提示框。
+ *
+ * ⚠️ 这里**不能按密度门控**。原来写的是
+ *   `settings.showBookmarkTooltip && density.value === 'normal' && !!description`，
+ *   但 `.bm-desc` 本身也只在 normal 密度渲染（模板里 `v-if="density === 'normal'"`）
+ *   —— 两处一叠加，**compact / icon 密度下简介就彻底看不到了**：
+ *   卡片上没有，悬停也不出。实测 18 个「布局 × 密度 × 卡片风格」组合里
+ *   只有 4 个（grid / drawer + normal）能出提示框，其余 **14 个简介不可达**
+ *   （`/tmp/jerry-sb/tooltip-probe.mjs`）。
+ *
+ *   那个 `density === 'normal'` 是「补上书签排列设置」那次重构的**副作用**：
+ *   原本大概写的是 `!props.compact`（两值），改成 normal/compact/icon 三值枚举后
+ *   被直译成 `=== 'normal'`，顺带把新加的 icon 密度也一起关掉了 ——
+ *   提交信息里只字未提，是查 `git log -S` 才定位到的。
+ *
+ *   提示框的职责恰恰是**揭示卡片放不下的东西**，所以卡片显示得越少它越该出现：
+ *   compact 只有名称、icon 连名称都没有，这两个密度最需要它。
+ *
+ * 保留 `!!description`：种子里 24 条书签全都有简介，所以这条实际不影响演示数据。
+ * 代价是「icon 密度 + 用户自己新增的、没填简介的书签」仍然悬停无反应
+ * （那种情况下连名称都看不到）—— 这是**已知的遗留边界**，
+ * `tooltip-probe.mjs` 里有一条断言专门钉住它，改掉时会报红。
+ */
 const showTooltip = computed(
-  () => settings.showBookmarkTooltip && density.value === 'normal' && !!props.bookmark.description,
+  () => settings.showBookmarkTooltip && !!props.bookmark.description,
 )
+
+/** 提示框元素，用来量它有没有伸出视口（见 `clampTooltip`）。 */
+const tipEl = ref(null)
+
+/**
+ * 把提示框水平方向夹回视口内。
+ *
+ * 提示框是 `left: 50%` + `translateX(-50%)` 居中在卡片上的，
+ * 而它是 `width: max-content`（最宽 280px）—— 卡片越窄、离视口边缘越近，
+ * 左右两头就越容易伸到视口外面被切掉。实测：
+ *
+ * | 场景 | 首卡提示框 left |
+ * | --- | --- |
+ * | 1440 宽 + `drawer` + icon 密度 | **-39**（卡片只有 ~66px 宽） |
+ * | 375 宽 + `grid` + normal 密度 | **-43** |
+ *
+ * ⚠️ 第二行说明这**不是新问题** —— 窄视口下 normal 密度早就溢出了，
+ * 只是没人量过。放开 icon 密度的提示框之后才变得显眼。
+ *
+ * 做法：不改 `left`，只给 `transform` 加一个 `--tip-shift` 偏移量
+ * （见 `.bm-tooltip`）。要先把当前偏移量减掉，才能拿到「没有偏移时」的位置，
+ * 否则每次悬停都会在已有偏移上再叠一次、越推越远。
+ *
+ * 在 `mouseenter` 里算而不是常驻监听：位置只跟布局有关，
+ * 每次悬停重算一次就够，也不用挂 resize / scroll 监听。
+ */
+function clampTooltip() {
+  const el = tipEl.value
+  if (!el) return
+  const cur = parseFloat(el.style.getPropertyValue('--tip-shift')) || 0
+  const r = el.getBoundingClientRect()
+  const left = r.left - cur
+  const right = r.right - cur
+  const pad = 8
+  let shift = 0
+  if (left < pad) shift = pad - left
+  else if (right > window.innerWidth - pad) shift = window.innerWidth - pad - right
+  el.style.setProperty('--tip-shift', `${Math.round(shift)}px`)
+}
 
 function open() {
   emit('open', props.bookmark)
@@ -138,6 +201,7 @@ function onRelease() {
     @click="open"
     @keydown.enter="open"
     @keydown.space.prevent="open"
+    @mouseenter="clampTooltip"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
     @dragover="onDragOver"
@@ -171,7 +235,7 @@ function onRelease() {
 
     <!-- 悬停提示框 -->
     <Transition name="tip">
-      <div v-if="showTooltip" class="bm-tooltip">
+      <div v-if="showTooltip" ref="tipEl" class="bm-tooltip">
         <div class="tip-head">
           <strong>{{ bookmark.name }}</strong>
         </div>
@@ -442,7 +506,16 @@ function onRelease() {
 
 /* —— 悬停提示框 ——
    这里刻意不用 .glass：提示框浮在分类标题上方，半透明底会把底下的字透上来
-   和网址叠在一起。改用 --tip_bg_color（近不透明）+ 自身的模糊兜底。 */
+   和网址叠在一起。改用 --tip_bg_color（近不透明）+ 自身的模糊兜底。
+
+   ⚠️ `--tip-shift` 是「水平夹回视口」的偏移量，由 `clampTooltip()` 在
+   `mouseenter` 时算出并写在元素的行内样式上（默认 0）。
+   提示框是 `left:50%` + `translateX(-50%)` 居中在卡片上的，
+   而它是 `width:max-content`（最宽 280px）—— 卡片窄到一定程度
+   （icon 密度只有 ~66px）或视口窄到 375px 时，两头就会伸出视口被切掉。
+   ⚠️ 别改成用 `left` 来做这个偏移：`left` 一变，`clampTooltip()` 里
+   用 `getBoundingClientRect()` 反推「没偏移时的位置」就没法算了，
+   偏移会在每次悬停时累加、越推越远。 */
 .bm-tooltip {
   backdrop-filter: blur(var(--back_filter));
   -webkit-backdrop-filter: blur(var(--back_filter));
@@ -457,7 +530,7 @@ function onRelease() {
   padding: 10px 12px;
   pointer-events: none;
   position: absolute;
-  transform: translate(-50%, 4px);
+  transform: translate(calc(-50% + var(--tip-shift, 0px)), 4px);
   transition: opacity 0.18s ease, transform 0.18s ease;
   width: max-content;
   z-index: 40;
@@ -465,7 +538,7 @@ function onRelease() {
 
 .bm-card:hover .bm-tooltip {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translate(calc(-50% + var(--tip-shift, 0px)), 0);
 }
 
 .tip-head strong {
