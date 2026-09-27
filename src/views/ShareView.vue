@@ -15,7 +15,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import BookmarkCard from '@/components/BookmarkCard.vue'
 import MainSearchBar from '@/components/MainSearchBar.vue'
-import { groupedBookmarks, state } from '@/composables/useStore'
+import { groupBookmarks, groupedBookmarks, state } from '@/composables/useStore'
 import { settings } from '@/composables/useSettings'
 import { useI18n } from '@/composables/useI18n'
 import { supabase, supabaseConfigured } from '@/data/supabase'
@@ -29,37 +29,9 @@ const shared = ref(null)
 const loading = ref(supabaseConfigured)
 const loadError = ref('')
 
-/** 按 sortOrder 排序的小工具。 */
-const byOrder = (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
-
 /**
- * 把 RPC 返回的扁平数组分组成和主页一致的结构。
- *
- * ⚠️ 子分类必须取 `collect(c.id).self`，不能写成 `collect(c.id)` ——
- *    后者返回的是 `{self, sub}` 对象，`.length` 是 undefined，
- *    所有子分类会被静默滤掉。主页那边踩过同一个坑，见 useStore 的注释。
+ * slug 是否可用。云端模式看 RPC 结果，本地模式比对本机分享设置。
  */
-function groupShared(data) {
-  const cats = data?.categories || []
-  const bms = data?.bookmarks || []
-  const top = cats.filter((c) => !c.parentId).sort(byOrder)
-
-  const collect = (catId) => {
-    const self = bms.filter((b) => b.categoryId === catId).sort(byOrder)
-    const sub = cats
-      .filter((c) => c.parentId === catId)
-      .sort(byOrder)
-      .map((c) => ({ category: c, bookmarks: bms.filter((b) => b.categoryId === c.id).sort(byOrder) }))
-    return { self, sub }
-  }
-
-  return top.map((cat) => {
-    const { self, sub } = collect(cat.id)
-    return { category: cat, bookmarks: self, subs: sub.filter((s) => s.bookmarks.length) }
-  })
-}
-
-/** slug 是否可用。云端模式看 RPC 结果，本地模式比对本机分享设置。 */
 const matched = computed(() => {
   if (supabaseConfigured) return !!shared.value
   return state.share.enabled && state.share.slug && state.share.slug === route.params.slug
@@ -78,9 +50,21 @@ const totalCount = computed(() => {
   return state.bookmarks.length
 })
 
+/**
+ * 分组。
+ *
+ * ⚠️ 云端那份**也走 `groupBookmarks`** —— 以前这里有一份独立的 `groupShared()`，
+ *    和主页的 `groupedBookmarks` 是两份逻辑。两边都各自踩过同一个 `.self` 的坑，
+ *    而且**两边都同样会丢弃孤儿书签**：分享数据里若有一条书签的 `categoryId`
+ *    对不上任何分类（主人删过分类、或数据不同步），它会从分享页静默消失，
+ *    而 `totalCount` 照样把它算进「N 个网址」。
+ *    合并成一个函数之后，两个页面不可能再漂移。
+ */
 const groups = computed(() => {
-  if (supabaseConfigured) return groupShared(shared.value).filter((g) => g.bookmarks.length || g.subs.length)
-  return groupedBookmarks.value.filter((g) => g.bookmarks.length || g.subs.length)
+  const all = supabaseConfigured
+    ? groupBookmarks(shared.value?.categories || [], shared.value?.bookmarks || [])
+    : groupedBookmarks.value
+  return all.filter((g) => g.bookmarks.length || g.subs.length)
 })
 
 const gridStyle = computed(() => ({ '--cols': settings.perRow }))
@@ -153,10 +137,20 @@ watch(() => route.params.slug, (s) => { if (s) loadShared(s) }, { immediate: tru
 
       <MainSearchBar @open="openBookmark" />
 
-      <section v-for="group in groups" :key="group.category.id" class="cat-group">
+      <section
+        v-for="group in groups"
+        :key="group.category.id"
+        class="cat-group"
+        :class="{ 'cat-group--virtual': group.virtual }"
+      >
         <header class="group-head">
           <div class="gh-icon"><AppIcon :name="group.category.icon || 'Folder'" :size="15" /></div>
-          <h2>{{ group.category.name }}</h2>
+          <!--
+            ⚠️ 「未分类」是 `groupedBookmarks` 补出来的**虚拟分组**（见 useStore），
+                `category.name` 是空串，不翻译的话标题是一片空白。
+                主页那边（HomeView）同样要处理。
+          -->
+          <h2>{{ group.virtual ? t('common.uncategorized') : group.category.name }}</h2>
         </header>
         <div class="grid" :style="gridStyle">
           <BookmarkCard

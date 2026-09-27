@@ -30,6 +30,7 @@ import {
   reorderBookmarks,
   reorderCategories,
   state,
+  UNCATEGORIZED_ID,
   updateCategory,
 } from '@/composables/useStore'
 import { setSetting, settings } from '@/composables/useSettings'
@@ -143,8 +144,37 @@ function openBookmark(b) {
   window.open(b.url, '_blank', 'noopener,noreferrer')
 }
 
+/**
+ * 把模板里拿到的分类 id 翻成**该落库的值**。
+ *
+ * ⚠️ 「未分类」是渲染层补出来的**虚拟分组**（见 useStore 的 `UNCATEGORIZED_ID`），
+ *    它的 id `'__uncategorized__'` **绝不能进数据** —— 那会留下一个指向不存在
+ *    分类的 `categoryId`，下次渲染时又被当成孤儿，语义彻底乱掉。
+ *    真实书签落在「未分类」时，`categoryId` 存的是 `null`。
+ *
+ * ⚠️ **所有「从模板拿分类 id → 写库」的路径都必须过这一层。**
+ *    我第一次只改了 `onGroupDrop`，注释里还写了「只在写库前这一处翻译」——
+ *    **那句话是错的：写库的路径不止一处。** 漏掉的 `onCardDrop` 是这样的：
+ *    往「未分类」分组里的**另一张卡片**上拖（而不是拖到分组空白处），
+ *    落库的就是那个虚拟 id。`onCardDragStart` 存的 `dragState.categoryId`
+ *    也一样要翻 —— 它直接参与「是不是同一个分类」的比较。
+ *
+ *    高亮 / 落点判断仍然用虚拟 id（`dropTarget.categoryId === group.category.id`），
+ *    那是**渲染层**的事，不要一起翻译。
+ */
+function realCatId(id) {
+  return id === UNCATEGORIZED_ID ? null : id
+}
+
+/**
+ * 新增书签。
+ *
+ * ⚠️ 这里翻成**空串**而不是 `null` —— 对话框把空串当作「没指定」，
+ *    自己会回落到默认分类。跟 `realCatId()` 的 `null` 是两套语义，别混。
+ */
 function addBookmark(categoryId = '') {
-  bookmarkDialog.value = { open: true, bookmark: null, categoryId: categoryId || activeCategory.value }
+  const catId = realCatId(categoryId) || ''
+  bookmarkDialog.value = { open: true, bookmark: null, categoryId: catId || activeCategory.value }
 }
 
 function editBookmark(b) {
@@ -205,7 +235,9 @@ async function onSidebarMove({ from, to }) {
  * 想放到某个分类的**末尾**，就往那个分组的空白处放（走 onGroupDrop）。
  */
 async function onCardDragStart(b, categoryId) {
-  dragState.value = { id: b.id, categoryId, name: b.name }
+  /* 存的必须是**落库口径**的分类 id（见 realCatId）—— 它直接参与
+     「源和目标是不是同一个分类」的比较，混进虚拟 id 会让同组拖拽被当成跨组。 */
+  dragState.value = { id: b.id, categoryId: realCatId(categoryId), name: b.name }
   dropTarget.value = { kind: '', id: '', categoryId: '' }
 }
 
@@ -252,9 +284,14 @@ async function onCardDrop(target, categoryId) {
   clearDrag()
   if (!src.id || !target?.id || src.id === target.id) return
 
-  if (src.categoryId === categoryId) {
+  /* ⚠️ 先把虚拟 id 翻成落库口径（`null`），下面每一处都用这个 ——
+     直接拿模板传进来的 `categoryId` 去 `moveBookmark` 会把
+     `'__uncategorized__'` 写进数据。 */
+  const cat = realCatId(categoryId)
+
+  if (src.categoryId === cat) {
     const list = state.bookmarks
-      .filter((b) => b.categoryId === categoryId)
+      .filter((b) => b.categoryId === cat)
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
       .map((b) => b.id)
     const fi = list.indexOf(src.id)
@@ -270,10 +307,10 @@ async function onCardDrop(target, categoryId) {
   } else {
     // 跨分类：插到目标卡片前面。index 是「目标在**不含源**的兄弟列表里」的下标。
     const siblings = state.bookmarks
-      .filter((b) => b.categoryId === categoryId && b.id !== src.id)
+      .filter((b) => b.categoryId === cat && b.id !== src.id)
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     const at = siblings.findIndex((b) => b.id === target.id)
-    const ok = await moveBookmark(src.id, categoryId, at < 0 ? null : at)
+    const ok = await moveBookmark(src.id, cat, at < 0 ? null : at)
     toast(ok ? t('toast.moved') : t('toast.moveFail'), ok ? 'success' : 'error')
   }
 }
@@ -282,8 +319,10 @@ async function onCardDrop(target, categoryId) {
 async function onGroupDrop(categoryId) {
   const src = dragState.value
   clearDrag()
-  if (!src.id || src.categoryId === categoryId) return
-  const ok = await moveBookmark(src.id, categoryId, null)
+  /* 拖进「未分类」时落库的必须是 `null`，不能是那个虚拟 id —— 见 realCatId。 */
+  const target = realCatId(categoryId)
+  if (!src.id || src.categoryId === target) return
+  const ok = await moveBookmark(src.id, target, null)
   toast(ok ? t('toast.moved') : t('toast.moveFail'), ok ? 'success' : 'error')
 }
 
@@ -369,14 +408,17 @@ async function quickToggleEdit() {
         v-for="group in groups"
         :key="group.category.id"
         class="cat-group"
-        :class="{ folded: settings.layout === 'drawer' && isCatCollapsed(group.category.id) }"
+        :class="{
+          'cat-group--virtual': group.virtual,
+          folded: settings.layout === 'drawer' && isCatCollapsed(group.category.id),
+        }"
       >
         <header class="group-head" @click="settings.layout === 'drawer' && toggleCat(group.category.id)">
           <div class="gh-left">
             <div class="gh-icon">
               <AppIcon :name="group.category.icon || 'Folder'" :size="15" />
             </div>
-            <h2>{{ group.category.name }}</h2>
+            <h2>{{ group.virtual ? t('common.uncategorized') : group.category.name }}</h2>
             <span class="gh-count">{{ group.bookmarks.length + group.subs.reduce((n, s) => n + s.bookmarks.length, 0) }}</span>
           </div>
           <div class="gh-right">

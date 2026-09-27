@@ -244,17 +244,53 @@ export const categoryCounts = computed(() => {
   return acc
 })
 
-/** 全部书签按分类分组后的有序数组，用于主页渲染。 */
-export const groupedBookmarks = computed(() => {
-  const topLevel = state.categories
+/**
+ * 「未分类」虚拟分组的 id。
+ *
+ * ⚠️ 它**只活在渲染层，绝不落库** —— 书签的 `categoryId` 存的是 `null`，
+ *    不是这个字符串。别把它当成真分类写进数据（`moveBookmark` 收到它要翻成 `null`）。
+ *    前缀用 `__` 双下划线：真实分类 id 是 `createCategory` 生成的时间戳串，不会撞。
+ */
+export const UNCATEGORIZED_ID = '__uncategorized__'
+
+/**
+ * 把「分类数组 + 书签数组」分组成 `{ category, bookmarks, subs, virtual? }` 的有序数组。
+ *
+ * ⚠️ **主页和分享页必须共用这一个函数**。原来两边各写了一份（`groupedBookmarks`
+ *    和 ShareView 里的 `groupShared`），逻辑重复 → 修一边忘一边。事实上两边都
+ *    各自踩过同一个 `.self` 的坑，注释也是抄的。
+ *
+ * ⚠️ 末尾会补一个「未分类」虚拟分组，收那些 `categoryId` 对不上任何现存分类的
+ *    书签（`null`，或指向一个已被删掉 / 云端数据不一致的分类 id）。
+ *
+ *    这一条是**补一个真 bug**（2026-09-27）：`deleteCategory()` 把该分类下的书签
+ *    置成 `categoryId: null`，删除确认框也白纸黑字写着「书签将移至未分类」——
+ *    但这里**根本没有「未分类」这个分组**，于是那些书签：
+ *      卡片上不渲染（不属于任何分组）→ 看不见、编辑不了、删不掉，
+ *      而 `bookmarks.length` 照样把它们算进「N 个网址」的计数里。
+ *    实测：删掉一个装着 3 条书签的分类后，卡片 5 → 2 张，
+ *    而计数仍写「5 个网址」，那 3 条在整页文字里一个都搜不到。
+ *    设置面板的「清除分类」更狠 —— 它把**所有**书签都置成 `null`
+ *    （注意它是 SettingsPanel 里自己内联实现的，不走 `deleteCategory`），
+ *    于是整页 0 张卡、计数还写着 N。用户从此没有任何入口能再看到自己的书签。
+ *    （探针：`/tmp/jerry-sb/orphan-bookmarks.mjs`）
+ *
+ *    补上这个分组之后，**每一条书签都必然落在某个分组里**，
+ *    所以 `bookmarks.length` 这个计数口径自动就对了，不用另外改。
+ *
+ * @param {Array} categories 分类（扁平，含 parentId）
+ * @param {Array} bookmarks  书签（扁平）
+ */
+export function groupBookmarks(categories, bookmarks) {
+  const topLevel = categories
     .filter((c) => !c.parentId)
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
 
   const collect = (catId) => {
-    const self = state.bookmarks
+    const self = bookmarks
       .filter((b) => b.categoryId === catId)
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-    const children = state.categories
+    const children = categories
       .filter((c) => c.parentId === catId)
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     /**
@@ -274,7 +310,7 @@ export const groupedBookmarks = computed(() => {
     return { self, sub }
   }
 
-  return topLevel.map((cat) => {
+  const groups = topLevel.map((cat) => {
     const { self, sub } = collect(cat.id)
     return {
       category: cat,
@@ -282,7 +318,31 @@ export const groupedBookmarks = computed(() => {
       subs: sub.filter((s) => s.bookmarks.length),
     }
   })
-})
+
+  /*
+   * 孤儿书签：`categoryId` 为空、或指向一个不存在的分类。
+   * `categoryId` 为空字符串也当孤儿（历史数据 / 导入可能留下空串）。
+   */
+  const knownIds = new Set(categories.map((c) => c.id))
+  const orphans = bookmarks
+    .filter((b) => !b.categoryId || !knownIds.has(b.categoryId))
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+
+  if (orphans.length) {
+    groups.push({
+      /* `virtual` 让视图层知道「名字要走 i18n、这个 id 不是真分类」 */
+      virtual: true,
+      category: { id: UNCATEGORIZED_ID, name: '', icon: 'Inbox', parentId: null },
+      bookmarks: orphans,
+      subs: [],
+    })
+  }
+
+  return groups
+}
+
+/** 当前数据的分类分组（主页用）。 */
+export const groupedBookmarks = computed(() => groupBookmarks(state.categories, state.bookmarks))
 
 /** 常用书签：按访问次数取前 8 个。 */
 export const frequentBookmarks = computed(() => {
