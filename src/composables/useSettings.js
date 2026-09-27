@@ -14,6 +14,9 @@ export const settings = reactive({ ...defaultSettings })
 /** `matchMedia` 的 change 监听是否已经挂过（initSettings 可以被调用多次）。 */
 let mediaWired = false
 
+/** 跨标签页的 `storage` 监听是否已经挂过（同上，只能挂一次）。 */
+let crossTabWired = false
+
 /** 用户选的是 Light / Dark / system 三选一。 */
 export const themeMode = computed(() => settings.themeMode)
 
@@ -75,6 +78,30 @@ export async function initSettings() {
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
     mq?.addEventListener?.('change', () => {
       if (settings.themeMode === 'system') applyThemeAttr()
+    })
+  }
+
+  /*
+   * 跨标签页同步 —— 与 `useStore.js` 的 `initCrossTab()` 是同一类问题：
+   * `persist()` 是**整表按内存写**，两个标签页各拿一份快照，
+   * 后写的会把对方刚改的那一项抹掉（改主题 → 另一个标签页再改语言 → 主题回退）。
+   *
+   * ⚠️ 直接复用 `applyRemoteSettings()` —— 它本来就是为「外部推来的设置」写的：
+   *    只改内存 + 刷 `<html>` 属性，**一个字节都不落盘**，
+   *    所以不会「收到事件 → 再写一次 → 又触发事件」地打起来。
+   *    （云端实时同步走的就是这个函数，见 `useRealtime.js`。）
+   *
+   * ⚠️ `storage` 事件只发给**其他**标签页，本页改设置不会触发本页的这段逻辑。
+   */
+  if (!crossTabWired) {
+    crossTabWired = true
+    window.addEventListener('storage', (e) => {
+      if (e.key !== storageKeys.settings || e.newValue == null) return
+      try {
+        applyRemoteSettings(JSON.parse(e.newValue))
+      } catch {
+        // 另一个标签页写进去的是坏 JSON：保持现有设置别动
+      }
     })
   }
 }

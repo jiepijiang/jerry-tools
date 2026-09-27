@@ -54,6 +54,136 @@ async function withRollback(mutate, rollback, storageKey, storageValue) {
   return true
 }
 
+/* ------------------------------------------------------------ 跨标签页同步 */
+
+/**
+ * 业务键 → `state` 上的字段 + 期望的形状。
+ *
+ * ⚠️ 只列 `useStore` 自己拥有、且用 `persist()` **整表写**的那些键。
+ *    不在这里的：
+ *      · `settings` —— 归 `useSettings`（另一个 store，有自己的 persist 和订阅）；
+ *      · `seedVersion` —— 它是「补种子进度」的标记，不是业务数据。
+ */
+const CROSS_TAB_FIELDS = {
+  [storageKeys.categories]: { field: 'categories', kind: 'array' },
+  [storageKeys.bookmarks]: { field: 'bookmarks', kind: 'array' },
+  [storageKeys.sites]: { field: 'sites', kind: 'array' },
+  [storageKeys.favorites]: { field: 'favorites', kind: 'array' },
+  [storageKeys.submissions]: { field: 'submissions', kind: 'array' },
+  [storageKeys.feedback]: { field: 'feedback', kind: 'array' },
+  [storageKeys.notes]: { field: 'notes', kind: 'array' },
+  [storageKeys.users]: { field: 'users', kind: 'array' },
+  [storageKeys.visits]: { field: 'visits', kind: 'object' },
+  /*
+   * ⚠️ `session` 要**允许 `null`** —— 退出登录写的就是 `JSON.stringify(null)`
+   *    （也就是字符串 `"null"`）。按「必须是对象」判会把它当成坏值挡掉，
+   *    于是**另一个标签页退了登录，这一页还显示登录着**。
+   */
+  [storageKeys.session]: { field: 'session', kind: 'object', nullable: true },
+  // `share` 是「合并」语义（见 `loadAll()`），不是整表替换
+  [storageKeys.share]: { field: 'share', kind: 'object', merge: true },
+}
+
+/** 整个 storage 被 `clear()`（或某个键被 `removeItem`）时，各字段回到什么值。 */
+const CROSS_TAB_EMPTY = {
+  visits: () => ({}),
+  session: () => null,
+  share: () => ({ enabled: false, slug: '', displayName: 'Jerry', avatar: '' }),
+}
+
+let crossTabBound = false
+
+/**
+ * 监听 `storage` 事件，让**同一个浏览器里另一个标签页**的改动同步进来。
+ *
+ * ⚠️⚠️ 为什么必须做：`persist(key, value)` 是**整表按内存写** —— 既不重读、
+ *    也不合并。两个标签页各拿一份快照，于是**谁后写谁把对方抹掉**。
+ *    实测（`/tmp/jerry-sb/multi-tab.mjs`，修复前 **9 / 6**）：
+ *      · A 加一条、B 再加一条 → 存储里**只剩 B 的**，A 那条**永久消失**
+ *        （刷新也不在）；
+ *      · 反向顺序同样（不是「谁先谁赢」的偶然）；
+ *      · A 删一条、B 再加一条 → **被删的那条复活**；
+ *      · A 改了数据，B 的界面**毫无反应**，而 B 的 localStorage 已经变了 ——
+ *        也就是 B 的**内存态已经落后于存储**。
+ *    最后一条正是前两条的成因：B 之后任何一次写盘都会把 A 的改动抹掉。
+ *
+ * ⚠️ `storage` 事件**只发给「其他」标签页**（写的那一页收不到自己发的事件），
+ *    所以这里不会自伤 —— 本页写盘不会把本页刚做的改动回滚掉。
+ *
+ * ⚠️ 云端模式直接返回：那边有 `useRealtime` 的 `supabase.channel()`，
+ *    而且这些业务键在云端模式下本来就不写 localStorage。
+ *    **本地实现与云端实现不对称，本身就是信号** —— 云端有实时通道，
+ *    本地却连「同一个浏览器里另一个标签页」都不同步（而 localStorage
+ *    本来就有 `storage` 事件可用）。
+ *
+ * ⚠️ 还剩一个**很窄的竞态**（这里不修，如实记着）：如果两个标签页在
+ *    **同一个事件循环 tick 内**先后写盘，先写的那页可能还没来得及处理
+ *    `storage` 事件就被覆盖。正常人手操作（几百毫秒级）撞不上，
+ *    真要根治得把 `persist()` 改成「读-改-写」，而整表语义下
+ *    「合并」会把删除操作又复活回来 —— 那正是本条要修的 bug。
+ */
+function initCrossTab() {
+  if (crossTabBound) return
+  crossTabBound = true
+
+  window.addEventListener('storage', (e) => {
+    // 云端模式下这些键不写 localStorage，且有自己的实时通道
+    if (isCloudActive()) return
+
+    // `key === null` 表示另一个标签页调了 `localStorage.clear()`。
+    // ⚠️ 这里**不写盘** —— 写盘会再触发一轮事件，两个标签页可能来回打。
+    //    应用自己从不调 `clear()`（只有外部工具 / DevTools 会），
+    //    所以把内存态对齐成「都没有」就够了。
+    if (e.key == null) {
+      for (const { field } of Object.values(CROSS_TAB_FIELDS)) {
+        state[field] = CROSS_TAB_EMPTY[field] ? CROSS_TAB_EMPTY[field]() : []
+      }
+      return
+    }
+
+    const spec = CROSS_TAB_FIELDS[e.key]
+    if (!spec) return
+
+    // 键被删掉了（`removeItem`）—— 回到空值，别留着上一个标签页的旧数据
+    if (e.newValue == null) {
+      state[spec.field] = CROSS_TAB_EMPTY[spec.field] ? CROSS_TAB_EMPTY[spec.field]() : []
+      return
+    }
+
+    let value
+    try {
+      value = JSON.parse(e.newValue)
+    } catch {
+      /*
+       * 另一个标签页写进去的是坏 JSON。
+       * ⚠️ **保持现有状态，别跟着变空** —— 这正是上一轮
+       *    「读不出来 ≠ 没有数据」的同一个原则：读不出来时
+       *    最坏的选择是把它当成「没有」。
+       */
+      if (!state.readProblems.some((p) => p.key === e.key)) {
+        state.readProblems.push({ key: e.key, reason: 'bad_json' })
+      }
+      return
+    }
+
+    // 形状不对也当成读不出来（同 `readTyped`）
+    const okShape =
+      spec.kind === 'array'
+        ? Array.isArray(value)
+        : value == null
+          ? !!spec.nullable
+          : typeof value === 'object'
+    if (!okShape) {
+      if (!state.readProblems.some((p) => p.key === e.key)) {
+        state.readProblems.push({ key: e.key, reason: 'bad_shape' })
+      }
+      return
+    }
+
+    state[spec.field] = spec.merge ? { ...state[spec.field], ...value } : value
+  })
+}
+
 /* ------------------------------------------------------------------ 初始化 */
 
 /**
@@ -295,6 +425,13 @@ async function loadAll() {
 
 /** 应用启动时调一次。 */
 export async function initStore() {
+  /*
+   * ⚠️ 挂在 `state.ready` 判断**之前**：`initStore()` 可能被调多次
+   *    （main.js 一次、切适配器后 `reloadStore()` 一次），
+   *    而监听只需要绑一次。放在后面的话「第二次调用」会直接 return，
+   *    监听就永远没绑上（而且这个失败是静默的）。
+   */
+  initCrossTab()
   if (state.ready) return
   await loadAll()
 }
