@@ -1321,6 +1321,30 @@ const decide = (st) => (st.state === 'ok' && st.value?.length ? 'use' : 'seed')
 
 ⚠️ 这是**手工步骤**，改完记得改回来（探针头注释里写了同样的操作）。
 
+### 验证层次
+
+| 层 | 结果 |
+| --- | --- |
+| dev（5174） | 14 个探针全绿：orphan 18 / write-fail-audit 29 / **read-fail-audit 12** / **empty-vs-first 11** / settings 45 / tooltip 329 / tip-nodesc 67 / desc-verify 43 / desc-matrix 260 / drag 25 / i18n-render 14 / icon-ui 15 / i18n-parity 21 / icon-policy 34 |
+| 另跑（不在 runner 里） | `unit-cloud` 48 / 0、`transfer-verify` 32 / 0、`transfer-ui` 31 / 0 —— 改了 `seedIfEmpty()` 和云端适配器，这三个必须单独验 |
+| dist 子路径（5199） | 同上 14 个探针全绿 |
+| 线上 | 同上 14 个探针全绿 |
+| 产物一致性 | 主包 `index-BbdPx8jD.js`，本地与线上 SHA-256 均为 `d6f8564fcdca32e4c8c1bcdffffca50cfbf2cd56891817950ba6f625ab50ca08` |
+
+⚠️ **跑线上时 `tooltip-probe` 崩过两次**，都是
+`page.goto: Timeout 30000ms exceeded` —— 崩在 `seed()` 的**第一次导航**上，
+也就是应用逻辑还没跑起来的时候，所以**不可能是代码回归**（dev / dist 同代码都是 329/0）。
+根因是探针设计：每次 `load()` 要**两次完整导航**，光 A 段 12 个组合就是 24 次，
+整个探针几十次真实网络往返，一次抖动就整体崩掉、**连汇总行都不打**。
+→ 给 `seed()` 的 `goto` 加了**一次重试**（60s 超时 + 打印第一次的失败原因）。
+重试只影响「页面有没有加载出来」，**不碰任何断言** ——
+真失败发生在页面加载**之后**，洗不绿。
+
+⚠️ 批量 runner 还有个坑一并修了：**所有探针原来共用 `_r.log`**，
+下一个探针会把上一个的输出覆盖掉。探针崩掉时（抛异常、没有「通过 X / 失败 Y」
+汇总行）才想起要排查，而完整堆栈**已经没了**，只能整个重跑。
+→ 改成**每个探针单独一个 `_run-<名字>.log`**，并且失败时额外补打 40 行。
+
 ---
 
 ## 待办
