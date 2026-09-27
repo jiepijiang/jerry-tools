@@ -26,6 +26,15 @@ export const state = reactive({
   session: null,
   share: { enabled: false, slug: '', displayName: 'Jerry', avatar: '' },
   visits: {},
+  /**
+   * 「键存在但读不出来」的那些键。
+   *
+   * ⚠️ 这是**数据完整性告警**，不是普通错误 —— 用户需要知道
+   *    「你有一份数据我读不出来，我没有动它」，否则他只会看到
+   *    一个空页面，然后（在修这个 bug 之前）被种子数据冒充。
+   *    见 `seedIfEmpty()` 与 `readState()` 的注释。
+   */
+  readProblems: [],
 })
 
 /* ------------------------------------------------------------------ 落盘 */
@@ -72,38 +81,118 @@ const SEED_ADDITIONS = {
 }
 
 /**
+ * 读一个键，并把「**形状不对**」也算成读不出来。
+ *
+ * ⚠️ 为什么形状不对要归到 `unreadable` 而不是「空」：
+ *    `normalizeSnapshot()` **只校验键名、不校验值的形状**，所以
+ *    「恢复了一个不是本站导出的 JSON」会把 `{"bookmarks": {"a":1}}`
+ *    原样写进存储。下次启动若把它当成「空」，就会用种子把它顶掉 ——
+ *    用户刚恢复的（哪怕是错的）那份数据就没了。
+ */
+async function readTyped(key, kind) {
+  const st = await storage.readState(key)
+  if (st.state !== 'ok') return st
+  const okShape =
+    kind === 'array' ? Array.isArray(st.value) : st.value != null && typeof st.value === 'object'
+  return okShape ? st : { state: 'unreadable', value: null, reason: 'bad_shape' }
+}
+
+/**
+ * 读一个键，读不出来就记一笔并返回兜底值。
+ *
+ * ⚠️ 别写成 `(await storage.read(k)) || fallback` —— 那会把「读不出来」
+ *    和「真的没有」一起静默变成空，用户只看到一个空列表，没有任何解释。
+ *    实测：`jt:notes` 存成 `'{'` 时，导出的备份里它**静默消失**，
+ *    而 toast 说的是「备份已下载」。
+ */
+async function readOr(key, fallback) {
+  const st = await storage.readState(key)
+  if (st.state === 'unreadable') state.readProblems.push({ key, reason: st.reason })
+  return st.state === 'ok' && st.value != null ? st.value : fallback
+}
+
+/**
  * 首次启动时把种子数据写进去。
  *
- * ⚠️ `sites`（发现页）在**云端模式下不落盘**。
- *    `discover_sites` 是全局公开表，只有 admin 能写；
- *    普通用户登录后如果在这里把 377 条种子写一遍，
- *    会撞上 RLS、刷一屏 `new row violates row-level security policy`。
- *    全局数据由 `supabase/seed-discover.mjs` 用 service_role 灌一次，
- *    这里只在读到空的时候**在内存里**用种子兜底显示。
+ * ⚠️⚠️ 判据**不是**「读出来是空的」。
+ *    原来的 `!v || !v.length` 把三种情况混成了一种，后果都很难看：
+ *
+ *    **① 用户主动清空了**（写的是 `[]`）→ 被判成「首次启动」→ 灌种子。
+ *       实测（`/tmp/jerry-sb/empty-vs-first.mjs`）：
+ *       点「清除所有书签」→ 刷新 → **22 条种子全回来**；
+ *       删掉**最后一条**书签、点「清除分类」，同样复活。
+ *       这是用户明确表达「我要清空」，刷新就把它撤销，说不过去。
+ *
+ *    **② 键存在但读不出来**（坏 JSON / 形状不对）→ 被判成「空」→
+ *       `persist()` 把原值**覆盖**掉，用户的原始字节永久消失。
+ *       实测（`read-fail-audit.mjs`）：`jt:bookmarks` 存成 `'{'` 之后打开页面，
+ *       它被 22 条种子顶掉，界面显示的正是那些种子 —— 用户看到的是
+ *       「我的书签变成了默认数据」，而且**连原始字节都救不回来**。
+ *
+ *    根因是 `read()` 的返回类型 `any | null` 分不清「不存在」和「读不出来」，
+ *    所以才有了 `readState()`。现在的判据：
+ *
+ *      键不存在 + **从没灌过种子** → 灌
+ *      其余一律**保持原样**（读不出来的还会记进 `state.readProblems`）
+ *
+ * ⚠️ 「从没灌过种子」用 `seedVersion` 判断。它在云端模式是 LOCAL_ONLY
+ *    （回落到 localStorage），标记的是「**这台设备**有没有灌过」——
+ *    正是我们要的语义：首次启动要灌，之后任何一次「空」都不再灌。
  */
 async function seedIfEmpty() {
-  const cats = await storage.read(storageKeys.categories)
-  if (!cats || !cats.length) {
-    state.categories = clone(seedCategories)
-    await persist(storageKeys.categories, state.categories)
-  } else {
-    state.categories = cats
+  // 判据之一：这台设备有没有灌过种子（`seedVersion` 一旦落盘就永远在）
+  const seeded = (await storage.read(storageKeys.seedVersion)) != null
+
+  /**
+   * 决定一个键怎么处理。
+   * 返回值：'use'（用读到的值）/ 'seed'（灌种子）/ 'keep'（别动，保持空 + 记一笔）
+   */
+  const decide = (st) => {
+    if (st.state === 'unreadable') return 'keep'
+    if (st.state === 'ok') return 'use'
+    return seeded ? 'keep' : 'seed' // absent
   }
 
-  const bms = await storage.read(storageKeys.bookmarks)
-  if (!bms || !bms.length) {
-    state.bookmarks = clone(seedBookmarks)
-    await persist(storageKeys.bookmarks, state.bookmarks)
-  } else {
-    state.bookmarks = bms
+  const handle = async (key, kind, seedData) => {
+    const st = await readTyped(key, kind)
+    const action = decide(st)
+    if (action === 'use') return st.value
+    if (action === 'seed') {
+      const fresh = clone(seedData)
+      await persist(key, fresh)
+      return fresh
+    }
+    // 'keep'：读不出来、或者「空的但已经灌过种子」。
+    // 两种情况都**不写盘** —— 写盘就是覆盖用户的原始数据。
+    if (st.state === 'unreadable') state.readProblems.push({ key, reason: st.reason })
+    return []
   }
 
-  const sites = await storage.read(storageKeys.sites)
-  if (sites && sites.length) {
-    state.sites = sites
-  } else {
-    state.sites = clone(seedSites)
-    if (!isCloudActive()) await persist(storageKeys.sites, state.sites)
+  state.categories = await handle(storageKeys.categories, 'array', seedCategories)
+  state.bookmarks = await handle(storageKeys.bookmarks, 'array', seedBookmarks)
+
+  /*
+   * ⚠️ `sites`（发现页）在**云端模式下不落盘**。
+   *    `discover_sites` 是全局公开表，只有 admin 能写；
+   *    普通用户登录后如果在这里把 377 条种子写一遍，
+   *    会撞上 RLS、刷一屏 `new row violates row-level security policy`。
+   *    全局数据由 `supabase/seed-discover.mjs` 用 service_role 灌一次，
+   *    这里只在读到空的时候**在内存里**用种子兜底显示。
+   */
+  {
+    const st = await readTyped(storageKeys.sites, 'array')
+    const action = decide(st)
+    if (action === 'use') {
+      state.sites = st.value
+    } else if (action === 'seed') {
+      state.sites = clone(seedSites)
+      if (!isCloudActive()) await persist(storageKeys.sites, state.sites)
+    } else {
+      // ⚠️ 发现页读不出来时**不能退回种子** —— 377 条全局数据不是用户数据，
+      //    拿种子顶上去会让用户以为「发现页就这些」。保持空 + 记一笔。
+      if (st.state === 'unreadable') state.readProblems.push({ key: storageKeys.sites, reason: st.reason })
+      state.sites = []
+    }
   }
 }
 
@@ -151,21 +240,34 @@ async function syncSeedAdditions() {
  */
 async function loadAll() {
   await seedIfEmpty()
-  // 紧跟其后：给老用户补种子里新增的条目（全新用户这里是空操作）
-  await syncSeedAdditions()
+  /*
+   * 紧跟其后：给老用户补种子里新增的条目（全新用户这里是空操作）。
+   *
+   * ⚠️ 有读不出来的键时**什么都别补** —— `syncSeedAdditions()` 会
+   *    `persist(storageKeys.bookmarks, …)`，那就是拿种子去覆盖那个
+   *    读不出来的原值，正好是 `seedIfEmpty()` 刚刚避开的那个坑。
+   *    （`seedVersion` 缺失 + 书签读不出来时真的会走到这条：它会把
+   *     `state.bookmarks`（此时是空数组）补成 `[b22]` 然后写盘。）
+   */
+  if (!state.readProblems.length) await syncSeedAdditions()
 
-  state.favorites = (await storage.read(storageKeys.favorites)) || []
-  state.submissions = (await storage.read(storageKeys.submissions)) || []
-  state.feedback = (await storage.read(storageKeys.feedback)) || []
-  state.notes = (await storage.read(storageKeys.notes)) || []
-  state.users = (await storage.read(storageKeys.users)) || []
-  state.visits = (await storage.read(storageKeys.visits)) || {}
+  /*
+   * ⚠️ 这里以前是 `(await storage.read(k)) || []` —— 读不出来时静默变成空，
+   *    用户看到的是一个空列表，没有任何解释。这些键**不会被种子覆盖**
+   *    （危害小于上面两个），但同样该让用户知道，所以一起记进 `readProblems`。
+   */
+  state.favorites = await readOr(storageKeys.favorites, [])
+  state.submissions = await readOr(storageKeys.submissions, [])
+  state.feedback = await readOr(storageKeys.feedback, [])
+  state.notes = await readOr(storageKeys.notes, [])
+  state.users = await readOr(storageKeys.users, [])
+  state.visits = await readOr(storageKeys.visits, {})
 
   if (!isCloudActive()) {
-    state.session = await storage.read(storageKeys.session)
+    state.session = await readOr(storageKeys.session, null)
   }
 
-  const share = await storage.read(storageKeys.share)
+  const share = await readOr(storageKeys.share, null)
   if (share) state.share = { ...state.share, ...share }
 
   // 预置一个管理员账号，方便直接体验后台。

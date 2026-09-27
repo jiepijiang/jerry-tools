@@ -218,6 +218,15 @@ async function doUploadLocal() {
 async function doBackup() {
   const snap = await exportSnapshot()
   download(`jerry-tools-backup-${formatDate()}.json`, JSON.stringify(snap, null, 2))
+  /*
+   * ⚠️ `exportSnapshot()` 会静默跳过读不出来的键。不提示的话，
+   *    用户手里是一份**缺表**的备份，却被告知「备份已下载」——
+   *    等真出事要用它的时候才发现缺的正是最重要的那张。
+   */
+  if (snap.missing?.length) {
+    toast(t('toast.backupIncomplete', { n: snap.missing.length }), 'warning')
+    return
+  }
   toast(t('toast.backupOk'))
 }
 

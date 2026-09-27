@@ -539,6 +539,29 @@ export const supabaseAdapter = {
     return readCloud(key)
   },
 
+  /**
+   * 三态读。
+   *
+   * ⚠️ 云端这边**没有 `'unreadable'` 这一态** —— `fetchRows()` 读失败会直接
+   *    `throw`（不像本地 `safeGet` 那样被吞成 `null`），所以要么拿到值、要么抛。
+   *    换句话说：本地那个「读失败被当成空」的坑在云端**不存在**，
+   *    但换成了另一个更响的问题 —— 读失败会让 `bootstrap()` 整个 reject。
+   *
+   * ⚠️ `'rows'` 类型读到空表时返回的是 `[]` 而不是 `null`，所以它是
+   *    `'ok' + 空数组`，**不是 `'absent'`**。这个区分很重要：
+   *    `seedIfEmpty()` 只对 `'absent'` 灌种子，于是
+   *    「用户把云端书签删光了」不会被下次启动的种子撤销。
+   *
+   * 本地键（`session` / `seedVersion` 等）交给 localFallback，语义与本地一致。
+   */
+  async readState(key) {
+    if (LOCAL_ONLY.has(key) || !SPECS[key]) {
+      return localFallback ? localFallback.readState(key) : { state: 'absent', value: null }
+    }
+    const value = await readCloud(key)
+    return value == null ? { state: 'absent', value: null } : { state: 'ok', value }
+  },
+
   async write(key, value) {
     if (LOCAL_ONLY.has(key) || !SPECS[key]) {
       return localFallback ? localFallback.write(key, value) : true

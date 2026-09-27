@@ -9,6 +9,10 @@
    上层（useStore / useSettings / SettingsPanel）只认这组方法，不知道底下是谁：
 
      read(key)          -> any | null
+     readState(key)     -> { state: 'ok' | 'absent' | 'unreadable', value, reason? }
+                           ⚠️ `read` 分不清「键不存在」和「读不出来」，两者都是 null。
+                              需要区分时用 `readState`（`seedIfEmpty` 就是靠它
+                              才不会把坏值当成空、进而用种子覆盖掉用户数据）。
      write(key, value)  -> boolean        写失败返回 false，调用方据此回滚
      remove(key)        -> void
      readAll()          -> 全量快照（备份用）
@@ -60,6 +64,44 @@ export const localStorageAdapter = {
 
   async read(key) {
     return safeGet(key)
+  },
+
+  /**
+   * 读一个键，**并且说清楚为什么读不出来**。
+   *
+   * ⚠️⚠️ `read()` 的返回类型是 `any | null` —— 「键**不存在**」和
+   *    「键存在但**解析不了**」都变成 `null`，调用方**没法区分**。
+   *    而 `seedIfEmpty()` 原来的判据是 `!v || !v.length`，于是
+   *    「读失败」被当成「没有数据」，紧接着 `persist()` 把种子写进去 ——
+   *    **用户的原始字节被覆盖，且不可恢复**。
+   *    实测（`/tmp/jerry-sb/read-fail-audit.mjs`）：`jt:bookmarks` 存成 `'{'`
+   *    之后打开页面，它会被 22 条种子顶掉，界面上显示的正是那些种子。
+   *
+   * 这个方法把三态显式化：
+   *
+   *   'ok'          读到了，`value` 是解析后的值
+   *   'absent'      键**不存在**（只有首次启动才会这样）
+   *   'unreadable'  键存在，但读不出来（坏 JSON / 隐私模式）
+   *
+   * ⚠️ 判据是「`getItem` 返回什么」而不是「`JSON.parse` 成不成功」：
+   *    只有 `getItem` 返回 `null` 才代表键不存在。
+   *
+   * ⚠️ 隐私模式（连 `getItem` 都抛）**也算 unreadable，不能算 absent** ——
+   *    算成 absent 会在「读不了」的时候往存储里灌种子，方向正好反了。
+   */
+  async readState(key) {
+    let raw
+    try {
+      raw = localStorage.getItem(key)
+    } catch {
+      return { state: 'unreadable', value: null, reason: 'storage_denied' }
+    }
+    if (raw == null) return { state: 'absent', value: null }
+    try {
+      return { state: 'ok', value: JSON.parse(raw) }
+    } catch {
+      return { state: 'unreadable', value: null, reason: 'bad_json' }
+    }
   },
 
   async write(key, value) {
@@ -194,6 +236,7 @@ export const storage = {
     return active.name
   },
   read: (key) => active.read(key),
+  readState: (key) => active.readState(key),
   write: (key, value) => active.write(key, value),
   remove: (key) => active.remove(key),
   readAll: () => active.readAll(),
@@ -204,13 +247,31 @@ export const storage = {
 /** 备份快照的版本号，恢复时用来判断兼容性。 */
 export const SNAPSHOT_VERSION = 1
 
-/** 导出为带元信息的备份对象。 */
+/**
+ * 导出为带元信息的备份对象。
+ *
+ * ⚠️ `readAll()` 会**静默跳过**读不出来的键（`safeGet` 把它们变成 null，
+ *    然后被 `if (v != null)` 过滤掉）。于是「存储坏了一张表」时，
+ *    导出的备份里少一张表，而调用方 toast 说的是「备份已下载」——
+ *    用户以为手里有一份完整备份，真出事时才发现缺的就是最重要的那张。
+ *    实测（`/tmp/jerry-sb/read-fail-audit.mjs` 场景 6）：`jt:notes` 就是这么消失的。
+ *
+ * 所以这里额外算出 `missing`（**键存在但读不出来**的那些），
+ * 让调用方有机会如实提示。`missing` 是附加字段，不影响恢复侧的解析。
+ */
 export async function exportSnapshot() {
   const data = await storage.readAll()
+  const missing = []
+  for (const key of Object.values(storageKeys)) {
+    if (key in data) continue
+    const st = await storage.readState(key)
+    if (st.state === 'unreadable') missing.push(key)
+  }
   return {
     version: SNAPSHOT_VERSION,
     app: 'jerry-tools',
     exportedAt: new Date().toISOString(),
     data: clone(data),
+    missing,
   }
 }

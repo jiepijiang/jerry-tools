@@ -60,6 +60,10 @@ export const messages = {
     'weather.setCityHint': '没拿到定位权限，现在显示的是默认城市，点击设置所在城市',
     'weather.geoFallbackHint': '没拿到定位权限，暂时显示默认城市「{name}」· 点顶部天气可改',
 
+    // 数据完整性告警（`useStore.state.readProblems` 非空时顶部那条）
+    'data.readProblem': '有 {n} 项本地数据读不出来，已保留原样、没有被覆盖。',
+    'data.readProblemAction': '去数据备份',
+
     'search.placeholder': '搜索分类、网址或关键词...',
     'search.short': '搜索...',
     'search.in': '在 {name} 中搜索',
@@ -358,6 +362,8 @@ export const messages = {
     'toast.restoreOk': '恢复完成',
     'toast.restoreFail': '恢复失败',
     'toast.backupOk': '备份已下载',
+    // 「备份不完整」要单独说 —— 少了几张表却说「已下载」，用户以为手里有完整备份
+    'toast.backupIncomplete': '备份已下载，但有 {n} 项数据读不出来，没能导进去',
     'toast.uploadLocalOk': '已上传：新增 {b} 条书签、{c} 个分类，跳过 {s} 条重复',
     'toast.uploadLocalNothing': '本机没有可上传的新数据',
     'toast.uploadLocalNeedLogin': '请先登录，再上传本机数据',
@@ -429,6 +435,9 @@ export const messages = {
     'weather.notLocated': 'Not located',
     'weather.setCityHint': 'No location permission — showing the default city. Click to set yours.',
     'weather.geoFallbackHint': 'No location permission — showing the default city "{name}". Click the weather card to change it.',
+
+    'data.readProblem': '{n} local item(s) could not be read. They were left untouched — nothing was overwritten.',
+    'data.readProblemAction': 'Open data backup',
 
     'search.placeholder': 'Search categories, sites or keywords...',
     'search.short': 'Search...',
@@ -728,6 +737,7 @@ export const messages = {
     'toast.restoreOk': 'Restored',
     'toast.restoreFail': 'Restore failed',
     'toast.backupOk': 'Backup downloaded',
+    'toast.backupIncomplete': 'Backup downloaded, but {n} item(s) could not be read and are not included',
     'toast.uploadLocalOk': 'Uploaded: {b} bookmarks and {c} categories added, {s} duplicates skipped',
     'toast.uploadLocalNothing': 'Nothing new to upload from this device',
     'toast.uploadLocalNeedLogin': 'Sign in first, then upload this device’s data',
