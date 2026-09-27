@@ -55,6 +55,15 @@ const iconSrc = computed(() => faviconOf(props.bookmark.url, props.bookmark.icon
 const density = computed(() => (props.dense ? 'compact' : settings.density))
 
 /**
+ * 卡片上会不会渲染名称。
+ *
+ * `icon` 密度不渲染 —— 模板里 `.bm-text` 有 `v-if="density !== 'icon'"`
+ * （那个密度下**只有**一个 30px 的图标）。
+ * 注意要和模板里的条件保持一致，改一处就要改另一处。
+ */
+const cardShowsName = computed(() => density.value !== 'icon')
+
+/**
  * 悬停提示框。
  *
  * ⚠️ 这里**不能按密度门控**。原来写的是
@@ -70,16 +79,25 @@ const density = computed(() => (props.dense ? 'compact' : settings.density))
  *   被直译成 `=== 'normal'`，顺带把新加的 icon 密度也一起关掉了 ——
  *   提交信息里只字未提，是查 `git log -S` 才定位到的。
  *
- *   提示框的职责恰恰是**揭示卡片放不下的东西**，所以卡片显示得越少它越该出现：
- *   compact 只有名称、icon 连名称都没有，这两个密度最需要它。
+ *   提示框的职责恰恰是**揭示卡片放不下的东西**，所以卡片显示得越少它越该出现。
  *
- * 保留 `!!description`：种子里 24 条书签全都有简介，所以这条实际不影响演示数据。
- * 代价是「icon 密度 + 用户自己新增的、没填简介的书签」仍然悬停无反应
- * （那种情况下连名称都看不到）—— 这是**已知的遗留边界**，
- * `tooltip-probe.mjs` 里有一条断言专门钉住它，改掉时会报红。
+ * 判据（2026-09-27 第二轮修订）：**只要「卡片说不清这是什么」，就必须出提示框。**
+ *
+ *   1. `!!description` —— 有简介就有东西要揭示（卡片上最多两行）。
+ *   2. `!cardShowsName` —— 卡片上**连名字都没有**（icon 密度）。
+ *      这一条是补的：原来只判 `!!description`，于是
+ *      **icon 密度 + 没填简介的书签 = 卡片上只有一个图标、悬停也没反应**，
+ *      整条书签完全无法辨认，只能点开才知道是什么。
+ *      而简介在编辑器里是**可选**的（`<em class="opt">`，校验只管 name / url），
+ *      所以这个组合用户真能造出来 —— 不是理论边界。
+ *      实测：`/tmp/jerry-sb/tip-nodesc.mjs` 在 9 个组合 × 3 条书签里
+ *      准确报红 **2 条**，就是 `grid/icon` 与 `drawer/icon` 下的那条空简介书签。
+ *
+ * 反过来说：**卡片已经写着名字、又没有简介**时不出提示框 —— 那时它只剩网址
+ * 可揭示，为它弹一个浮层太吵。这是有意的取舍，`tip-nodesc.mjs` 里有断言钉住。
  */
 const showTooltip = computed(
-  () => settings.showBookmarkTooltip && !!props.bookmark.description,
+  () => settings.showBookmarkTooltip && (!!props.bookmark.description || !cardShowsName.value),
 )
 
 /** 提示框元素，用来量它有没有伸出视口（见 `clampTooltip`）。 */
@@ -239,7 +257,12 @@ function onRelease() {
         <div class="tip-head">
           <strong>{{ bookmark.name }}</strong>
         </div>
-        <p class="tip-desc">{{ bookmark.description }}</p>
+        <!--
+          ⚠️ `v-if` 不能省：icon 密度下没填简介的书签**也会**出提示框了
+          （见 `showTooltip` 的第 2 条判据），那时留一个空 `<p>` 会白占
+          一个 `margin-top: 3px` 的间距，标题和网址之间多一条缝。
+        -->
+        <p v-if="bookmark.description" class="tip-desc">{{ bookmark.description }}</p>
         <span class="tip-url">{{ bookmark.url }}</span>
       </div>
     </Transition>
