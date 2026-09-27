@@ -303,17 +303,25 @@ function onRelease() {
 }
 
 /* 名称允许**两行**。
-   一行只有 ~133px（卡片 209px - 图标 34 - 间距 12 - 内边距 28，实测最宽 133px），
+   一行只有 ~133px（卡片 209px - 内边距 28 - 图标 34 - 间距 12，实测 133.2px），
    只放得下约 9 个汉字 —— 像
    「echarts-legend中如何配置图标和文字的位置」这种标题会被截成
-   「echarts-legend…」，完全认不出是哪个站。两行把可用宽度翻倍到 ~252px。
+   「echarts-legend…」，完全认不出是哪个站。两行把可用宽度翻倍到 ~266px。
    用 -webkit-line-clamp 而不是自己截字符串：让浏览器按实际宽度断行，
    中英文混排、不同字号都能自适应。
    ⚠️ line-clamp 自带省略号，不能再配 `white-space:nowrap` + `text-overflow:ellipsis`
    （那会强制单行，clamp 失效）。
-   ⚠️ 量这个宽度时别取第一张卡：`.bm-text` 是 `flex: 0 1 auto`（只写了 min-width:0），
-   **短名字的卡片会收缩到内容宽** —— 第一张恰好是 "Unsplash" 就量到 71px，
-   和编辑模式（拖拽手柄 15px + 操作按钮 50px）的值一模一样，很容易误判。 */
+   ⚠️ **量这个宽度时不能直接读 `clientWidth`**：`.bm-text` 是 `flex: 0 1 auto`
+   （只写了 min-width:0），**短名字的卡片会收缩到内容宽** —— 读到的是内容宽，
+   不是可用宽。要先把里面的文字换成超长串撑满，量完再换回来。
+   （实测 `/tmp/jerry-sb/desc-fit2.mjs`：撑满后非编辑 133.2px、编辑 71.2px。）
+   ⚠️ `overflow-wrap: break-word` 是必需的，不是保险：没有它时，
+   **一整串没有断行机会的字符**（长英文单词、粘进来的 URL）不会折行，
+   只会被 `overflow:hidden` **横向硬切**，而且**连省略号都没有**
+   （line-clamp 的省略号只在「行数超出 clamp」时画，横向溢出不算）。
+   实测 `'x'.repeat(120)` → 占 1 行、`scrollWidth 855` / `clientWidth 133`、无省略号。
+   用 `break-word` 而不是 `anywhere`：后者会改变 min-content 固有尺寸，
+   连带影响 `.bm-text` 这个 flex 项的伸缩基准；前者只负责「该断的时候断」。 */
 .bm-name {
   color: var(--main_text_color);
   display: -webkit-box;
@@ -321,17 +329,57 @@ function onRelease() {
   font-weight: 500;
   line-height: 1.35;
   overflow: hidden;
+  overflow-wrap: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
+/* 描述允许**两行**（原来是单行 nowrap + ellipsis）。
+ *
+ * 为什么改：单行时可用宽度只有 **133.2px**，只放得下约 12 个汉字。实测种子里
+ * 「在线串口调试与固件升级」已占 126.5px —— 想再加个「· 需 Chrome」
+ * （约 163px）就放不下，只能截成「…」。两行把可用宽度翻倍到 ~266px。
+ *
+ * ⚠️ 别把「可用宽度」和「这张卡当前量到的宽度」搞混：
+ *    - 非编辑视图 `.bm-text` 可用 **133.2px**；
+ *    - 编辑视图只剩 **71.2px** —— 差的 62px 是 `.bm-actions`（编辑/删除
+ *      两个按钮 50px）+ 它多带出来的一个 12px flex gap。
+ *      ⚠️ 拖拽手柄 `.bm-grip` 是 `position:absolute`，**一点宽度都不占**，
+ *         别把它算进去（我一开始就写错了）。
+ *    - 直接读 `clientWidth` 还会更小：`.bm-text` 是 `flex: 0 1 auto`，
+ *      短内容会收缩到内容宽。要量可用宽度得先撑满。
+ *
+ * 写法与 `.bm-name` 完全一致，理由也一样：
+ * - 用 `-webkit-line-clamp` 而不是自己截字符串 —— 让浏览器按实际宽度断行，
+ *   中英文混排、不同字号都能自适应；
+ * - ⚠️ line-clamp 自带省略号，**不能再配 `white-space:nowrap` +
+ *   `text-overflow:ellipsis`**（那会强制单行，clamp 直接失效）。
+ *
+ * 代价（实测，见 `/tmp/jerry-sb/desc-cost.mjs`）：
+ * 卡片从 65px 变 81px，而且 `.grid` 是 `align-items: stretch`，
+ * **同一行有一张变高，整行都被撑高**。
+ * 但这不是新引入的 —— `.bm-name` 允许两行时**本来就**是这个行为
+ * （实测长名字让整行 65 → 83px），所以只是沿用既有设计。
+ * ⚠️ 量布局影响别用「整页高度」：`body` 有 `min-height:100vh`，
+ * 书签少的时候页面高度是**钝的**。要用 `.content` 高度或最后一张卡的底边。
+ *
+ * ⚠️ `overflow-wrap: break-word` 同样必需，理由见 `.bm-name` 上的注释 ——
+ * 没有它时，粘进来的长 URL 会被硬切且没有省略号。
+ *
+ * ⚠️ 别断言 `getComputedStyle(d).display === '-webkit-box'`：
+ * 现代 Chromium 把 `display:-webkit-box` 归一化成了 **`flow-root`**，
+ * 而 `-webkit-line-clamp` 作为独立属性照常生效。
+ * 要断言就断言 `-webkit-line-clamp` 的值。 */
 .bm-desc {
   color: var(--muted_text_color);
+  display: -webkit-box;
   font-size: 11.5px;
+  line-height: 1.4;
   margin-top: 3px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 /* —— 拖拽手柄 —— */

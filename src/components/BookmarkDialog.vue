@@ -202,6 +202,14 @@ function useAutoIcon() {
       <label class="fld">
         <span>{{ t('bookmark.desc') }} <em class="opt">{{ t('common.optional') }}</em></span>
         <input v-model="form.description" class="field" :placeholder="t('bookmark.descPlaceholder')" />
+        <!--
+          说明为什么要有这行：卡片上可用宽度只有 ~133px（编辑模式下 127px），
+          两行也就放得下二十来个汉字。**用户在这儿完全看不出这一点** ——
+          他写了一句 40 字的简介，保存后卡片上只剩「前半句…」，
+          而他多半不会去悬停，只会觉得「我写的东西丢了」。
+          提前说清「截断的是卡片、悬停能看全」，他就不用被迫把简介砍短。
+        -->
+        <small class="fld-hint">{{ t('bookmark.descHint') }}</small>
       </label>
 
       <label class="fld">
@@ -327,6 +335,17 @@ function useAutoIcon() {
   display: block;
   font-size: 11.5px;
   margin-top: 5px;
+}
+
+/* 字段说明（不是错误，所以用 muted 而不是 --danger）。
+   和 `.err` 同样的排版，保证有错误提示时两行不会跳。 */
+.fld-hint {
+  color: var(--muted_text_color);
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.4;
+  margin-top: 5px;
+  opacity: 0.85;
 }
 
 select.field {

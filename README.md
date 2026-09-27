@@ -198,11 +198,19 @@ import { storage, useCloudStorage, useLocalStorage } from '@/data/storage'
 > 它基于 **Web Serial API**，**只有 Chromium 系（Chrome / Edge）能打开串口**，
 > Safari 和 Firefox 不支持；并且必须走 HTTPS 或 localhost。
 >
-> 这条提示**刻意没有写进卡片描述**：`.bm-desc` 是固定宽度 + `white-space:nowrap`
-> + `text-overflow:ellipsis`，**可用宽度只有 127px**，而现有文案
-> 「在线串口调试与固件升级」已经占 126.5px —— 加任何后缀
-> （「· 需 Chrome」163px、「（仅 Chrome/Edge）」221px）都会被**静默截断成「…」**。
-> 哪天把 `.bm-desc` 改成允许两行，再考虑挪进卡片。
+> 这条提示**已经写进卡片描述**了（2026-09-27）：`在线串口调试与固件升级 · 需 Chrome`。
+> 之前写不进去，是因为 `.bm-desc` 是单行 `nowrap + ellipsis`，可用宽度只有
+> **133.2px**，而「在线串口调试与固件升级」已占 126.5px —— 加任何后缀
+> （「· 需 Chrome」约 163px、「（仅 Chrome/Edge）」约 221px）都会被**静默截断成「…」**。
+> 那天把 `.bm-desc` 放开成两行（见「待办」），才腾出空间。
+>
+> ⚠️ **编辑模式下仍然看不全**：`.bm-actions`（编辑/删除两个按钮，50px）是在流里的，
+> 加上它多带出来的一个 12px flex gap，一共吃掉 62px，`.bm-text` 只剩 **71.2px**，
+> 这句要占 4 行 → 被 clamp 到 2 行。这不是 bug ——
+> 悬停提示框（`max-width: 280px`）里是完整的。
+> 顺带一提：拖拽手柄 `.bm-grip` 是 `position: absolute`，**一点宽度都不占**，
+> 算可用宽度时别把它减进去（这个数我一开始算错过）。
+> `desc-verify.mjs` 的【H】组专门钉住了 71.2px 这个值，哪天编辑模式不再挤压会报红。
 
 ---
 
@@ -809,5 +817,56 @@ LAYOUT=grid DENSITY=icon STYLE=mac node drag-probe.mjs http://127.0.0.1:5199/jer
       （另有 3 条 `mail.google.com` / `drive.google.com` / `ai.google.dev` 的
       icon 是站点自己的资源，正常，**别一起删了** —— `icon-policy.mjs` 里专门
       有 10 条「不该误伤」的反例断言守着，`www.gstatic.com` 也在其中。）
-- [ ] `.bm-desc` 改成允许两行（或把描述上限写进编辑器的字数校验）。
-      现在只剩 0.5px 余量，任何补充说明都塞不进去，见上方「数据层与已知限制」末尾
+- [x] **`.bm-desc` 改成允许两行**（2026-09-27）。做了两件事：
+      1. `.bm-desc` 从单行 `nowrap + ellipsis` 改成 `-webkit-line-clamp: 2`
+         （与 `.bm-name` 同一套写法）。可用宽度从 133.2px 翻倍到 ~266px。
+      2. 编辑器描述框下加一行说明（`bookmark.descHint`）—— 用户在编辑框里
+         **完全看不出**卡片只显示两行，写了一句 40 字的简介、保存后只剩前半句，
+         多半不会去悬停，只会觉得「我写的东西丢了」。
+      顺带修掉 `.bm-name` 的一个**既有 bug**：没有 `overflow-wrap: break-word`
+      时，一整串没有断行机会的字符（长英文单词、粘进来的长 URL）会被
+      `overflow:hidden` **横向硬切，且连省略号都没有** ——
+      line-clamp 的省略号只在「行数超出 clamp」时画，横向溢出不算。
+      改之前有 `text-overflow: ellipsis` 所以**是**有省略号的，这条改法原本
+      对那个场景是**退步**，加上 `break-word` 才补回来。
+      用 `break-word` 而不是 `anywhere`：后者会改变 min-content 固有尺寸，
+      连带影响 `.bm-text` 这个 flex 项的伸缩基准。
+
+      **代价（实测，`/tmp/jerry-sb/desc-cost.mjs`、`seed-b22-impact.mjs`）**：
+      一张卡有 2 行描述就从 65.3px 变 81.4px，而 `.grid` 是
+      `align-items: stretch`，**同一行有一张变高整行都被撑高**。
+      但这不是新引入的 —— `.bm-name` 允许两行时**本来就**是这个行为
+      （实测长名字让整行 65 → 83px）。这条是放开描述两行的**前提**，
+      当初就是靠它才敢动。
+
+      ⚠️ 量布局影响**别用「整页高度」**：`body` 有 `min-height: 100vh`，
+      书签少的时候 `html.scrollHeight` 纹丝不动（钝指标）。
+      要用 `.content` 高度或最后一张卡的底边。
+      ⚠️ 量可用宽度**不能直接读 `clientWidth`**：`.bm-text` 是
+      `flex: 0 1 auto`，短内容会收缩到内容宽。要先用超长文本撑满再量。
+      ⚠️ 给 scoped 组件注入测试样式**必须加 `!important`**：`<style scoped>`
+      编译成 `.bm-desc[data-v-xxx]`（特异性 0,2,0），裸 `.bm-desc`（0,1,0）
+      压不过它 —— 我第一次就因此测出假的「+0px」。
+      ⚠️ 别断言 `getComputedStyle(d).display === '-webkit-box'`：
+      现代 Chromium 归一化成 **`flow-root`**，而 `-webkit-line-clamp`
+      作为独立属性照常生效。要断言就断言 line-clamp 的值。
+      ⚠️ 编辑器里那句说明用的是 `--muted_text_color`（不是 `--danger`），
+      排版和 `.err` 一致，保证有错误提示时两行不会跳。
+
+      验收：`desc-verify.mjs` **43 / 0**（含一条**故意断言「编辑模式下确实
+      被截断」**的已知限制，哪天编辑模式不再挤压它会红，提示去划掉这条）。
+- [x] **顺手把 b22（串口助手）那条提示写进了卡片描述**（2026-09-27）。
+      它依赖 Web Serial API，**只有 Chromium 系能开串口**。原来加不了后缀，
+      因为 `.bm-desc` 单行时「在线串口调试与固件升级」已占 126.5px / 可用
+      133.2px，加「· 需 Chrome」（约 163px）必被截断。两行放开后放得下了。
+      **代价**：这张卡 65.3 → 81.4px，`.content` 989.2 → 1005.3（+16.1px）。
+      b22 恰好**独占一行**（dev 分类第 6 条、每行 5 个），所以 `stretch`
+      只影响它自己，全站只有它一张是 81px。
+      考虑过「在线串口调试 · 需 Chrome」（能压回一行、卡片仍 65px），
+      否掉的两个理由：① 那个一行是**擦边过的**（约 131.6px / 可用 133.2px），
+      换个字体栈就掉成两行；② 会丢掉「与固件升级」这个能力。
+      ⚠️ **改描述不用动 `SEED_VERSION`** —— 那个机制是给「增删条目」用的
+      （`useStore.js` 的 `SEED_ADDITIONS` 只补缺失的 id，不覆盖已有条目的字段），
+      所以老用户看到的还是旧文案，**这是设计如此、不是没生效**；
+      想验证请用隐私窗口或先清 localStorage。
+      （线上是云端模式，登录后书签以 Supabase 为准，seed 只影响未登录访客。）

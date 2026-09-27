@@ -48,8 +48,33 @@ export const seedBookmarks = [
    * ⚠️ 依赖 Web Serial API，**只有 Chromium 系（Chrome / Edge）能用**，
    *    Safari 和 Firefox 打不开串口；且必须 HTTPS 或 localhost。
    *    这条要是在卡片上写清楚，比让人点进去发现连不上强。
+   *
+   * 2026-09-27：上面那句「写清楚」终于落地了 —— 描述加上「· 需 Chrome」后缀。
+   * 之前加不了，是因为 `.bm-desc` 是单行 `nowrap + ellipsis`，可用宽度只有
+   * 133.2px，而「在线串口调试与固件升级」已占 126.5px，加任何后缀都会被
+   * 静默截断成「…」。那天把 `.bm-desc` 放开成两行，才腾出空间。
+   *
+   * ⚠️ 代价（实测 `/tmp/jerry-sb/seed-b22-impact.mjs`）：描述占满两行，
+   *    这张卡从 65.3px 变 81.4px。b22 恰好**独占一行**（dev 分类第 6 条，
+   *    每行 5 个），所以 `.grid` 的 `align-items: stretch` 只影响它自己，
+   *    `.content` 总高 989.2 → 1005.3（+16.1px），全站只有它一张是 81px。
+   *
+   *    考虑过退而求其次写「在线串口调试 · 需 Chrome」（能压回一行、卡片仍是
+   *    65px），但那个一行是**擦边过的**（约 131.6px / 可用 133.2px），换个
+   *    字体栈就会掉成两行，而且会丢掉「与固件升级」这个能力 —— 上面刚说过
+   *    「功能比一般的在线版全」，不值得为 16px 砍掉。所以选信息完整的两行版。
+   *
+   * ⚠️ 编辑模式下仍然看不到完整的它：`.bm-actions`（编辑/删除两个按钮，
+   *    50px）是**在流里**的，加上它多带出来的一个 12px flex gap，一共吃掉
+   *    62px，`.bm-text` 只剩 71.2px，这句要占 4 行 → 被 clamp 到 2 行。
+   *    不是 bug：悬停提示框（`max-width:280px`）里是完整的。
+   *
+   * ⚠️ 改描述**不需要**动 `SEED_VERSION` —— 那个机制是给「增删条目」用的
+   *    （见 `useStore.js` 的 `SEED_ADDITIONS`），它只补缺失的 id，不覆盖已有
+   *    条目的字段。所以老用户（localStorage 里已有 b22）看到的还是旧文案，
+   *    这是**设计如此**、不是没生效；想验证请用隐私窗口或先清 localStorage。
    */
-  { id: 'b22', categoryId: 'dev', name: '串口助手', url: 'https://serial.xywml.com/', description: '在线串口调试与固件升级', icon: 'https://serial.xywml.com/apple-touch-icon.png', sortOrder: 5 },
+  { id: 'b22', categoryId: 'dev', name: '串口助手', url: 'https://serial.xywml.com/', description: '在线串口调试与固件升级 · 需 Chrome', icon: 'https://serial.xywml.com/apple-touch-icon.png', sortOrder: 5 },
 
   { id: 'b6', categoryId: 'design', name: 'Figma', url: 'https://www.figma.com', description: '在线协作设计工具', icon: 'https://static.figma.com/app/icon/2/touch-120.png', sortOrder: 0 },
   { id: 'b7', categoryId: 'design', name: 'Dribbble', url: 'https://dribbble.com', description: '设计师灵感社区', sortOrder: 1 },
