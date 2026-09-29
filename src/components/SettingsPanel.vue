@@ -12,7 +12,7 @@ import { searchEngines } from '@/data/seed'
 import { resetSettings, setSetting, settings } from '@/composables/useSettings'
 import { geo, refreshWeather, setWeatherCity, useMyLocation, weather } from '@/composables/useClock'
 import { useI18n } from '@/composables/useI18n'
-import { state, updateShare } from '@/composables/useStore'
+import { resetToDefaults, state, updateShare } from '@/composables/useStore'
 import { isLoggedIn, pushLocalToCloud } from '@/composables/useAuth'
 import { exportSnapshot, storage } from '@/data/storage'
 import { storageKeys } from '@/data/options'
@@ -90,6 +90,30 @@ async function toggle(key, value) {
 async function doResetSettings() {
   const ok = await resetSettings()
   toast(ok ? t('toast.saved') : t('toast.saveFail'), ok ? 'success' : 'error')
+}
+
+/**
+ * 恢复默认数据：把默认分类 + 默认书签**整套**灌回来。
+ *
+ * ⚠️ 这是**破坏性操作**，所以必须走 `ask()` 二次确认，且确认文案要把
+ *    「会覆盖你现有的分类与书签、不可撤销」写清楚。
+ *
+ * ⚠️ 为什么需要它（而不是让「恢复默认设置」顺手把数据也恢复了）：
+ *    实测 `/tmp/jerry-sb/reset-default.mjs`：
+ *      · 场景 1 —— 点「恢复默认设置」书签和分类**一条都不动**；
+ *      · 场景 3 —— 清空书签+分类后刷新，**永远是空的**：
+ *        `seedIfEmpty()` 的判据是「键不存在 + 从没灌过种子」，
+ *        `seedVersion` 一落盘就再也不会灌（2026-09-27 有意为之，见那边注释）。
+ *    两条合起来 = **清空之后没有任何路能回到默认数据**。这个按钮补的就是这条路。
+ *
+ * ⚠️ 写盘失败必须如实报错 —— 与 `clearBookmarks()` 同一条纪律
+ *    （`write-fail-audit.mjs`：写失败却报成功是违约，不是取舍）。
+ */
+async function doResetData() {
+  ask(t('settings.resetData'), t('settings.resetDataConfirm'), async () => {
+    const ok = await resetToDefaults()
+    toast(ok ? t('toast.resetDataOk') : t('toast.resetDataFail'), ok ? 'success' : 'error')
+  })
 }
 
 function ask(title, text, action) {
@@ -707,9 +731,16 @@ async function copyShare() {
           </div>
 
           <div class="group">
-            <button class="btn-ghost" @click="doResetSettings">
-              <AppIcon name="RefreshCw" :size="15" />{{ t('common.reset') }}
-            </button>
+            <label class="group-label">{{ t('settings.resetGroup') }}</label>
+            <div class="btn-grid">
+              <button class="btn-ghost" @click="doResetSettings">
+                <AppIcon name="RefreshCw" :size="15" />{{ t('settings.resetSettings') }}
+              </button>
+              <button class="btn-ghost danger" @click="doResetData">
+                <AppIcon name="RotateCcw" :size="15" />{{ t('settings.resetData') }}
+              </button>
+            </div>
+            <p class="group-hint">{{ t('settings.resetDataHint') }}</p>
           </div>
         </template>
       </div>

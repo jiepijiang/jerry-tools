@@ -197,7 +197,7 @@ function initCrossTab() {
  * 表现是「代码改了、部署也成功了，但自己打开还是老样子」，
  * 特别容易误判成没部署成功。
  */
-const SEED_VERSION = 2
+const SEED_VERSION = 3
 
 /**
  * 每个版本**新增**的条目 id，按实体分组。
@@ -208,6 +208,17 @@ const SEED_VERSION = 2
 const SEED_ADDITIONS = {
   // v2（2026-09-20）：导航主页「开发工具」加一条在线串口助手
   2: { bookmarks: ['b22'] },
+  /*
+   * v3（2026-09-29）：Jerry 点名要的两条
+   *   b23 Agent Lab（学习工作台）→ 学习成长
+   *   b24 PDF24 Tools            → 效率工具
+   *
+   * ⚠️ 只登记 id、**不覆盖已有条目的字段** —— 所以老用户拿到的只是
+   *    「多了两条」，他自己改过的名字 / 描述 / 分类不会被牵动。
+   *    这是**唯一**能让「localStorage 里已经有数据的自己」看到这两条的路径
+   *    （`seedIfEmpty()` 只在键不存在时才灌，见那个函数的注释）。
+   */
+  3: { bookmarks: ['b23', 'b24'] },
 }
 
 /**
@@ -359,6 +370,68 @@ async function syncSeedAdditions() {
   if (changed) await persist(storageKeys.bookmarks, state.bookmarks)
   // 即使没变化也记上版本，避免每次启动都重跑一遍
   await persist(storageKeys.seedVersion, SEED_VERSION)
+}
+
+/**
+ * 把默认分类 + 默认书签**整套**灌回来（**覆盖**现有的分类与书签）。
+ *
+ * ⚠️⚠️ 为什么需要它 —— 「清空之后没有任何路能回到默认数据」：
+ *    `seedIfEmpty()` 的判据是「**键不存在** + 从没灌过种子」，所以
+ *    `seedVersion` 一落盘，用户清空之后**再也不会**被灌种子
+ *    （这是 2026-09-27 有意改的：用户主动清空，刷新不该复活数据）。
+ *    而设置面板里那个「恢复默认」按钮走的是 `useSettings.resetSettings()`，
+ *    它只重置**设置项**，一个书签都不动。
+ *    实测 `/tmp/jerry-sb/reset-default.mjs`：
+ *      · 场景 3 —— 清空书签+分类 → 刷新 → 仍然是 0 / 0（回不来）；
+ *      · 场景 1 —— 点「恢复默认(设置)」→ 书签 3 条、分类 2 个，**一条没变**。
+ *    两条合起来就是「按了『恢复默认』，数据不但没回来、还什么都没发生」。
+ *
+ * ⚠️ **破坏性操作**：调用方必须先二次确认。见 `SettingsPanel.vue` 的
+ *    `doResetData()` —— 它把确认文案写成了「会覆盖、不可撤销」。
+ *
+ * ⚠️ 写盘失败要**回滚内存 + 返回 false**，由调用方如实报错。这是本项目的
+ *    硬纪律（见 `write-fail-audit.mjs`：写失败却报成功是违约，不是取舍）。
+ *
+ * ⚠️ 如实记着的残留：两个键**不是原子的**。categories 写成功、bookmarks 写失败时，
+ *    内存会整体回滚，但存储里的 categories 已经是新的了 —— 刷新后会看到
+ *    「新分类 + 旧书签」。localStorage 没有事务，要根治得把两份数据合成一个键
+ *    （会牵动所有读写路径）。这里选择与 `clearCategories()` 保持同一种做法，
+ *    并把它记在这里，而不是假装原子。
+ *
+ * @returns {Promise<boolean>} 是否整套落盘成功
+ */
+export async function resetToDefaults() {
+  const prevCats = state.categories
+  const prevBms = state.bookmarks
+
+  // clone：种子是模块级常量，直接塞进 state 会被后续编辑改坏（下一次恢复就脏了）
+  const cats = clone(seedCategories)
+  const bms = clone(seedBookmarks)
+
+  state.categories = cats
+  const okCats = await persist(storageKeys.categories, cats)
+
+  state.bookmarks = bms
+  const okBms = await persist(storageKeys.bookmarks, bms)
+
+  if (!okCats || !okBms) {
+    state.categories = prevCats
+    state.bookmarks = prevBms
+    return false
+  }
+
+  /*
+   * 把「补种子进度」也推到当前版本。
+   *
+   * 不推也不会重复灌（种子里的 id 现在都在 `state` 里了），但推了语义更准 ——
+   * `seedVersion` 记的就是「**这台设备**同步到第几版了」。
+   *
+   * ⚠️ 这一步失败**不算整体失败**：业务数据已经正确落盘了，
+   *    为了一个进度标记把刚恢复好的数据回滚掉才是真的糟糕。
+   */
+  await persist(storageKeys.seedVersion, SEED_VERSION)
+
+  return true
 }
 
 /**

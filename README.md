@@ -1462,15 +1462,202 @@ new BroadcastChannel(…)                 // ✗ 没有
 
 | 层 | 结果 |
 | --- | --- |
-| dev（5174） | 15 个探针全绿：orphan 18 / write-fail-audit 29 / read-fail-audit 12 / empty-vs-first 11 / **multi-tab 19** / settings 45 / tooltip 329 / tip-nodesc 67 / desc-verify 43 / desc-matrix 260 / drag 25 / i18n-render 14 / icon-ui 15 / i18n-parity 21 / icon-policy 34 |
+| dev（5174） | 15 个探针全绿：orphan 18 / write-fail-audit 29 / read-fail-audit 12 / empty-vs-first 11 / **multi-tab 19** / settings 45 / tooltip 329 / tip-nodesc 67 / desc-verify 43 / desc-matrix 260 / drag 25 / i18n-render 14 / icon-ui 15 / i18n-parity 15 / icon-policy 28 |
 | dist 子路径（5199） | 同上 15 个探针全绿 |
 | 线上 | 同上 15 个探针全绿 |
 | 产物一致性 | 主包 SHA-256 本地与线上一致 |
+
+> ⚠️ **`i18n-parity` / `icon-policy` 的条数在 2026-09-29 变了（21 → 15、34 → 28）**，
+> 不是断言被删了：这两个探针文件当时被 `/tmp` 清掉了（见下节「顺手重建的验收基建」），
+> 按**原意重建**，覆盖内容与原来不完全相同 —— 重建版补了两条更强的检查
+> （代码引用的 key 是否存在、源码文本里的重复键），同时没有照抄原来那些冗余断言。
+> **上表已经是重建后的数字**，别拿旧的 21 / 34 去比对。
+>
+> 2026-09-29 起，dist / 线上这一层还多跑一个 `reset-default`，合计 **16 个探针**。
 
 ⚠️ **`multi-tab` 是本轮唯一一个需要「两个页面」的探针** —— 用
 `browser.newContext()` 开**一个** context、再开两个 `page`：
 同一 context 下的页面**共享 localStorage**（`sessionStorage` 才是每标签页独立的），
 这就是一个真实的「双开」。
+
+---
+
+## 「恢复默认」到底该恢复什么（默认配置与清空后的归路）
+
+### 起因
+
+Jerry 的原话：
+
+> 帮我把这个链接加入主站：`https://ai-study-exam.onrender.com/?date=2026-09-29&week=1#overview`
+> 并且 Jerry 导航的恢复默认将原本的数据都清除了，帮我在默认书签和分类中有一个默认配置，
+> 并添加这个书签：`https://tools.pdf24.org/zh/`
+
+这句话里有**两个可以分开验证的命题**，所以还是先量再改。
+
+### 一、先量：「恢复默认」真的清掉了数据吗？—— 没有
+
+`/tmp/jerry-sb/reset-default.mjs` 场景 1：夹具 2 分类 / 3 书签，点那个按钮。
+
+| | 点之前 | 点之后 |
+| --- | --- | --- |
+| 分类 | 2 | 2 |
+| 书签 | 3 | 3 |
+| 书签名 | 甲一 / 甲二 / 乙一 | 甲一 / 甲二 / 乙一 |
+
+**一条都没动。** 它走的是 `useSettings.resetSettings()` →
+`setSettings({ ...defaultSettings })`，落盘的只有 `jt:settings` 一个键，
+**代码上碰不到 `jt:bookmarks` / `jt:categories`**。
+
+场景 2 验证了它的真实职责（确实是设置回默认）：
+`themeMode` Dark→system、`perRow` 3→5、`searchEngine` google→baidu、
+`editMode` true→false。
+
+**那用户的问题出在哪？** 出在**摆放**：这个按钮紧挨在「确认清除」分组
+（清除分类 / 清除所有书签）**下面**，而且**自己不带分组标题**，
+读起来就是第三个「清除」动作。
+
+### 二、真正的缺口：清空之后，没有任何路能回到默认数据
+
+场景 3：清空书签 + 分类 → 刷新 → **仍然是 0 / 0**。
+
+这不是 bug，是 2026-09-27 那轮**有意**改的（见「读不出来 ≠ 没有数据」一节）：
+`seedIfEmpty()` 的判据是「**键不存在** + 从没灌过种子」，`seedVersion` 一落盘
+就再也不会灌 —— 因为「用户主动清空、刷新就复活」说不过去。
+
+代价当时没意识到：**判据收紧之后，「回到默认」这条路也一起没了**。
+两条合起来就是 —— 按了「恢复默认」，数据不但没回来，还什么都没发生。
+
+### 三、修法：拆成两个按钮
+
+```
+[恢复默认]
+  [恢复默认设置]  [恢复默认数据]
+  「恢复默认数据」会用内置的默认分类与默认书签覆盖你现有的分类和书签。
+```
+
+「恢复默认设置」保持原语义（只动设置项），新增的「恢复默认数据」走
+`useStore.resetToDefaults()`：把 `seedCategories` / `seedBookmarks`
+**clone 后整套写回**，并带二次确认。两个按钮都放进**带标题**的分组里，
+不再挂在「确认清除」下面。
+
+四个判断：
+
+| 判断 | 为什么 |
+| --- | --- |
+| **必须二次确认** | 它会覆盖用户自己加的所有分类与书签。确认文案写明「会覆盖、不可撤销」。 |
+| **写盘失败要回滚 + 如实报错** | 同 `clearBookmarks()` 的纪律（见「写失败审计」一节）。 |
+| **`clone()` 不能省** | 种子是模块级常量。直接塞进 `state` 会被后续编辑改坏，下一次恢复就脏了。 |
+| **`seedVersion` 也推到 3，但它失败不算整体失败** | 业务数据已经落盘了，为一个进度标记把刚恢复好的数据回滚掉更糟。 |
+
+⚠️ **如实记着的残留：两个键不是原子的。** `categories` 写成功、`bookmarks`
+写失败时，内存会整体回滚，但存储里的 `categories` 已经是新的 ——
+刷新后会看到「新分类 + 旧书签」。localStorage 没有事务，要根治得把两份数据
+合成一个键（会牵动所有读写路径）。这里选择与 `clearCategories()` 保持同一种
+做法并记下来，而不是假装原子。
+
+### 四、默认配置本身一直是完整的：6 分类 / 22 条 → 24 条
+
+场景 0 实测：全新用户拿到 **6 个分类 / 22 条书签**、界面渲染 22 张卡 ——
+种子**一直是完整的**，`seed.js` 在 git 历史里也**从未被清空过**（4 次提交都在）。
+缺的只是 Jerry 点名要的那两条。
+
+新增：
+
+| id | 名称 | 分类 | 地址 | 图标 |
+| --- | --- | --- | --- | --- |
+| b23 | Agent Lab | 学习成长 | `https://ai-study-exam.onrender.com/` | 写死 `/assets/favicon.svg` |
+| b24 | PDF24 Tools | 效率工具 | `https://tools.pdf24.org/zh/` | 留空（回落 `/favicon.ico`） |
+
+三条判断：
+
+1. **只存站点根地址，不存他复制过来的深链。** 他给的是
+   `…?date=2026-09-29&week=1#overview`，而这是**给所有人看的默认值** ——
+   里面写死一个日期，过一周就指向旧周次了。想要深链，编辑那条书签即可。
+2. **b23 的图标必须写死。** 它的 `/favicon.ico` 是 **404**
+   （返回 `application/json`，那台机器是纯 API 服务），真正在用的是 HTML 里
+   声明的 `/assets/favicon.svg`（实测 200 / svg）。留空的话 `faviconOf()`
+   会回落到那个 404 地址，卡片上只剩首字母。
+3. **b24 的图标留空是有意的，但它并不省流量。** `faviconOf()` 会回落到
+   `https://tools.pdf24.org/favicon.ico`（200，但那是 **143 KB** 的 ico）——
+   写死同一个地址效果完全一样，所以不写，少一个要维护的常量。
+
+书签名取自站点自己的 `<title>`：**「Agent Lab · 学习工作台」**，
+所以叫 `Agent Lab`（`ai-study-exam` 只是域名）。
+
+### 五、老用户怎么才能看到这两条：`SEED_VERSION` 2 → 3
+
+`seedIfEmpty()` 只在**存储为空**时灌种子，所以 Jerry 自己（localStorage 里
+已经有数据）**永远看不到新条目** —— 表现是「代码改了、部署也成功了，
+但自己打开还是老样子」。所以 `SEED_VERSION` +1，并在 `SEED_ADDITIONS` 里
+登记 `3: { bookmarks: ['b23', 'b24'] }`。
+
+⚠️ 登记的是**具体 id**，不是「补所有缺失的 id」—— 后者会把他删掉的条目复活。
+实测场景 0b：老用户升级后是 `["k1","k2","k3","b22","b23","b24"]`，
+原有 3 条书签、2 个分类**一条没丢**。
+
+### 六、探针自己抓到的真 bug：漏了一个 i18n 键
+
+写二次确认时漏了 `settings.resetDataConfirm`。`translate()` 取不到键时
+**退回 key 本身**，所以弹窗正文会明晃晃显示 `settings.resetDataConfirm`
+这串英文 —— **编译不报错、其余探针全绿**。
+
+重建 `i18n-parity.mjs` 时补了一条「代码里 `t('字面量')` 引用的键必须存在」，
+它**当场就红**：
+
+```
+❌ 代码引用的字面量键都存在于字典里  → ["settings.resetDataConfirm"]
+```
+
+补上中英两条后转绿。顺带这条守卫还抓到**我自己制造**的另一个问题：
+删 `common.reset` 时把上一行改成了 `common.cancel`，于是 zh 字典里出现了
+两个 `common.cancel` —— 对象字面量重复键是「后者胜、不报错」，
+**import 之后根本查不出来**，所以 `i18n-parity` 现在会额外读**源码文本**
+再查一遍重复键。
+
+### 七、造红
+
+开关是**改源码**：在 `useStore.resetToDefaults()` 第一行插
+`if (true) return false`（改完必须逐字节还原，本轮用 `shasum -c` 验过）。
+
+实测 **通过 34 / 失败 11** —— 11 条**全部**落在「恢复动作真的发生了」这一类
+（场景 4 的 9 条 + 场景 6 的 2 条），而**反向场景照常全绿**：
+场景 5（点取消不误伤）、场景 7（写盘失败如实报错 + 内存回滚）、
+场景 0/0b/1/2/3 一条没红。这证明「取消」「写失败」那两组不是空转。
+
+⚠️ 种子那两条链接的断言**不必再造红** —— 它们在**修复前产物**上本来就是红的
+（见下表 5199 那一行），一红一绿已经证明了有效性。
+
+### 八、顺手重建的验收基建（`/tmp` 被系统清掉了）
+
+2026-09-29 发现 `/tmp/jerry-sb` 里 **`loader.mjs` / `i18n-parity.mjs` /
+`i18n-render.mjs` / `icon-policy.mjs` 四个文件不见了**（同目录其余文件都还在，
+macOS 清 `/tmp` 不是全有全无）。都按原意重建，并按上面说的补了更强的检查。
+
+⚠️ **沙箱坑（本轮新踩，很重要）**：`.env.local` 被文件代理当成敏感内容拦下，
+**后台任务里审批会超时**：
+
+```
+Error: Sensitive content approval timed out. The operation was not authorized and was blocked.
+    at Object.wrappedReadFileSync (node-brokered-fs-shim.cjs)
+    at loadEnv (vite/…/dep-Dm0c1Wj2.js:16945)
+```
+
+`vite dev` 和 `vite build` 走的是**同一个** `resolveConfig` → `loadEnv`，
+所以两者都会撞上。而且表现不一样：
+
+- `vite build` **直接报错退出**（错误信息完整，一眼能看懂）；
+- `vite dev` **静默挂起** —— npm 的 spinner 一直转、端口永远不监听、
+  `--debug` 也只打到「loading env files」就没了。**只有把 vite 单独拉起来
+  看 stderr 才看得到真相。**
+
+**结论：vite 的 dev / build 必须在前台跑**（前台会弹审批并放行）。
+`npm run dev` 在前台跑会撞上前台超时，然后**自动转后台且不丢状态**，正好可以利用。
+
+另外 `vite.config.js` 里 `base` 是 dev=`/`、build=`/jerry-tools/`，
+所以模拟线上子路径**不能**用 `vite preview`（它对所有路径都回退 index.html，
+连 `/assets/*.js` 也回退，「产物缺文件」这类问题永远测不出来）——
+要用自己的静态服务（本轮重写了 `serve-static.mjs`，原来的 `pages-server.mjs`
+也一起被清掉了）。
 
 ---
 
@@ -1484,6 +1671,15 @@ new BroadcastChannel(…)                 // ✗ 没有
       发现 `persist()` 整表按内存写、且 `src/` 里没有任何 `storage` 监听，
       于是两个标签页**后写的会把先写的整表抹掉**（加的书签消失、删的书签复活）。
       详见「两个标签页同时开着」一节。探针 `multi-tab.mjs` 修复前 12 / 7 → **19 / 0**。
+- [x] **「恢复默认」拆成两个按钮 + 默认配置补齐**（2026-09-29）
+      起因是 Jerry 反馈「恢复默认把原本的数据都清除了」，并要求把
+      `ai-study-exam.onrender.com` 与 `tools.pdf24.org` 加进默认配置。
+      **实测它并没有清数据**（只重置设置项，书签分类一条不动）；
+      真正的缺口是「清空之后**没有任何路**能回到默认数据」。
+      新增「恢复默认数据」（带二次确认、写失败回滚），种子里补上
+      b23 Agent Lab / b24 PDF24 Tools，`SEED_VERSION` 2→3 让老用户也能拿到。
+      详见「「恢复默认」到底该恢复什么」一节。探针 `reset-default.mjs`
+      修复前 **25 / 20** → 修复后 **45 / 0**，造红 34 / 11。
 - [ ] 图标改走 Supabase Storage（当前仍存 base64）
 - [x] **书签跨分类拖拽 + 视觉反馈**（2026-09-24）
       顺带修掉了一个**比待办里写的严重得多**的真 bug ——

@@ -7,7 +7,8 @@
      - Claude   （App unavailable in region）
    其余 19 条全部实测可访问（Cloudflare 反爬拦截不算失效）。
 
-   2026-09-20 追加 1 条（b22 串口助手），共 **22 条** —— 见文件末尾的说明。
+   2026-09-20 追加 1 条（b22 串口助手），共 22 条；
+   2026-09-29 再追加 2 条（b23 Agent Lab / b24 PDF24 Tools），共 **24 条** —— 见文件末尾的说明。
 
    icon 字段：能拿到高清图标的直接写死（与参考站把图标存进数据的做法一致），
    拿不到的留空，由 faviconOf() 退回站点自己的 /favicon.ico。
@@ -93,9 +94,34 @@ export const seedBookmarks = [
   { id: 'b17', categoryId: 'learn', name: '掘金', url: 'https://juejin.cn', description: '开发者技术社区', icon: 'https://lf-web-assets.juejin.cn/obj/juejin-web/xitu_juejin_web/static/favicons/apple-touch-icon.png', sortOrder: 0 },
   { id: 'b18', categoryId: 'learn', name: 'Coursera', url: 'https://www.coursera.org', description: '在线学习平台', sortOrder: 1 },
 
+  /**
+   * 2026-09-29 追加（Jerry 点名要的）。站点真名取自它自己的 `<title>`：
+   * 「Agent Lab · 学习工作台」，所以书签名用 Agent Lab。
+   *
+   * ⚠️ **只存站点根地址**，不存他复制过来的那条
+   *    `?date=2026-09-29&week=1#overview` —— 默认数据里写死一个日期，
+   *    过一周就指向旧周次了，而且这是给**所有人**看的默认值。
+   *    他自己想要深链，编辑这条书签即可。
+   *
+   * ⚠️ **icon 必须写死**：它的 `/favicon.ico` 是 **404**
+   *    （返回 `application/json`，那台机器是纯 API 服务），
+   *    真正在用的是 HTML 里声明的 `/assets/favicon.svg`（200 / svg）。
+   *    留空的话 `faviconOf()` 会回落到那个 404 地址，卡片上只剩首字母。
+   */
+  { id: 'b23', categoryId: 'learn', name: 'Agent Lab', url: 'https://ai-study-exam.onrender.com/', description: 'AI 学习工作台', icon: 'https://ai-study-exam.onrender.com/assets/favicon.svg', sortOrder: 2 },
+
   { id: 'b19', categoryId: 'tools', name: 'Notion', url: 'https://www.notion.so', description: '全能笔记与协作工具', icon: 'https://www.notion.so/front-static/logo-ios.png', sortOrder: 0 },
   { id: 'b20', categoryId: 'tools', name: 'Todoist', url: 'https://todoist.com', description: '任务管理工具', icon: 'https://todoist.com/static/favicon-32x32.png', sortOrder: 1 },
   { id: 'b21', categoryId: 'tools', name: 'Excalidraw', url: 'https://excalidraw.com', description: '手绘风格白板工具', icon: 'https://excalidraw.com/apple-touch-icon.png', sortOrder: 2 },
+
+  /**
+   * 2026-09-29 追加（Jerry 点名要的）。PDF 工具箱，纯浏览器端处理、不上传文件。
+   *
+   * ⚠️ icon 留空是**有意的**，而且它并不省流量：`faviconOf()` 会回落到
+   *    `https://tools.pdf24.org/favicon.ico`（实测 200，但是 143 KB 的 ico）。
+   *    写死同一个地址也是一样的效果，所以不写 —— 少一个要维护的常量。
+   */
+  { id: 'b24', categoryId: 'tools', name: 'PDF24 Tools', url: 'https://tools.pdf24.org/zh/', description: '免费在线 PDF 工具箱', sortOrder: 3 },
 ]
 
 /** 可选的默认搜索引擎。 */
