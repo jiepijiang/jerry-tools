@@ -1627,6 +1627,36 @@ Jerry 的原话：
 ⚠️ 种子那两条链接的断言**不必再造红** —— 它们在**修复前产物**上本来就是红的
 （见下表 5199 那一行），一红一绿已经证明了有效性。
 
+### 验证层次
+
+| 层 | 结果 |
+| --- | --- |
+| 修复前产物（`index-Bx97FfON.js`，即线上那一版） | `reset-default` **通过 25 / 失败 20** |
+| 修复后 dist 子路径 | `reset-default` **45 / 0** |
+| 造红 | **34 / 11**（11 条全落在修复目标上，反向场景全绿） |
+| dev（5174） | `reset-default` 45/0、`i18n-render` 14/0 |
+| dist 全量 16 探针 | 全绿 |
+| **线上**（Actions `36535488726`） | **16 个探针全绿**；主包 SHA-256 与本地逐字节一致 |
+| 纯逻辑 | `i18n-parity` 15/0、`icon-policy` 28/0 |
+
+线上主包 `index-CH9v3k6X.js` =
+`6a1dfe566b53ecbd4a44fcd837aa57d918b0c3f06a285e1c6b45325f8bbf353e`，
+与本地 `dist/` 用 `cmp` 比对**逐字节一致**。
+
+⚠️ **线上那轮 `desc-verify` 抖动过一次**：第一次 `exit=1`、日志里是连接层错、
+**没有汇总行** → runner 判定「崩掉 + 有连接错」→ 等 25s 整条重试 → **43 / 0**。
+**这次重试不是多余的** —— 没有它，这一轮线上回归就会多一个假红，
+而它崩在 `page.goto`（应用逻辑还没跑起来），**看起来会像代码回归**。
+
+> 顺带一条判据：判断「这次重试了哪些探针」要看 **`_run-*-retry.log` 的文件时间戳**，
+> 别只看文件存不存在 —— `_run-orphan-bookmarkslive-retry.log` /
+> `_run-settings-auditlive-retry.log` 是 09-27 那轮留下的旧文件。
+
+对照报告：`make-resetdefault-report.mjs` → `shots/reset-default-before-after.html`
+（**证据全部读 `_rd-before` / `_rd-after` / `_rd-break` 三份原始日志，一个字不手写**）。
+这轮尤其必要 —— 因为本轮最值得记的结论恰恰是「**直觉里的结论是错的**」
+（用户报的 bug 不成立），手写报告就会把「我以为的」写进去。
+
 ### 八、顺手重建的验收基建（`/tmp` 被系统清掉了）
 
 2026-09-29 发现 `/tmp/jerry-sb` 里 **`loader.mjs` / `i18n-parity.mjs` /
