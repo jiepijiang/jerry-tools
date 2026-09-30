@@ -159,8 +159,19 @@ export async function transferLocalToCloud(mode = 'fill') {
    *    但没顺着往下查这条路径。
    *
    *    ⚠️ 探针 `write-fail-audit.mjs` **没覆盖这条** —— 它要求登录态
-   *    （`pushLocalToCloud` 先判 `isCloudActive()`）。这里只做了静态修正，
-   *    改动本身与其余三处同构，但**没有动态验证**，别当成已验证。
+   *    （`pushLocalToCloud` 先判 `isCloudActive()`）。当时只做了静态修正，
+   *    改动本身与其余三处同构，但**没有动态验证**。
+   *
+   *    ✅ **2026-09-30 补上了动态验证**（`transfer-cloud.mjs`，35 条）。
+   *    真浏览器 + 真 Supabase 测试账号，用 `addInitScript` 拦 `fetch` 制造写失败
+   *    （HTTP 403 一次、直接抛一次，覆盖 `writeCloud` 的 error 分支与
+   *    `supabaseAdapter.write` 的 catch 分支），断言**直接查库**而不是看界面自述。
+   *    造红两处，证明这些断言真的能红：
+   *      · 去掉下面这几行返回值检查 → **31 / 4**，症状是谎报
+   *        「已上传：新增 1 条书签、0 个分类」（而云端一条都没多）；
+   *      · 去掉 SettingsPanel 的 `write_failed` 分支 → **33 / 2**，
+   *        症状是把写失败说成「本机没有可上传的新数据」。
+   *    dev / dist 子路径 / 线上三层均 **35 / 0**。
    */
   const results = []
   if (plan.categories.changed) results.push(await storage.write(storageKeys.categories, plan.categories.rows))
