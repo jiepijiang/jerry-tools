@@ -1,8 +1,12 @@
 <script setup>
 /**
  * 书签新增 / 编辑弹窗。
- * 图标支持三种来源：自动获取 favicon、手填图标 URL、上传本地图片（转 dataURL 存本地）。
- * 校验失败时输入框会抖动一下（沿用 jerry-site 留言板的 shake 反馈）。
+ * 图标支持三种来源：自动获取 favicon、手填图标 URL、上传本地图片。
+ *
+ * ⚠️ 上传走 `uploadImage()`（`@/data/iconStorage`）：登录状态下会把图缩到
+ *    最长边 256px、转 WebP、传进 Storage，只往书签里存一个**公开 URL**；
+ *    未登录（纯本机模式）才回落 dataURL。以前这里直接 `readFileAsDataURL()`
+ *    把 base64 塞进书签，一张 2MB 的图 base64 之后是 ~2.7MB 一行。
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -11,7 +15,8 @@ import Modal from '@/components/Modal.vue'
 import { createBookmark, flatCategories, isDuplicateUrl, updateBookmark } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
-import { faviconOf, isUsableIcon, isValidUrl, readFileAsDataURL } from '@/utils/helpers'
+import { uploadImage } from '@/data/iconStorage'
+import { faviconOf, isUsableIcon, isValidUrl } from '@/utils/helpers'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -156,9 +161,20 @@ async function onIconFile(e) {
     toast(t('auth.imageTooBig'), 'error')
     return
   }
-  const dataUrl = await readFileAsDataURL(file)
-  form.value.icon = dataUrl
-  iconMode.value = 'upload'
+  try {
+    const { url } = await uploadImage(file, 'icon')
+    form.value.icon = url
+    iconMode.value = 'upload'
+  } catch (err) {
+    /*
+     * ⚠️ 这里**故意不回落 dataURL**。已登录却传不上去（网络 / 策略 / bucket 没建），
+     *    悄悄存成 base64 就等于把要修的问题又做了一遍，而且没人会发现 ——
+     *    表现是「图标设上了」。详见 iconStorage.js 顶部的取舍说明。
+     *    （未登录那条路不会走到这里，它在 uploadImage 内部就返回 dataURL 了。）
+     */
+    console.warn('[icon] 上传失败，未写入：', err)
+    toast(t('toast.uploadFail'), 'error')
+  }
 }
 
 function useAutoIcon() {

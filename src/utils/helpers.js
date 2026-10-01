@@ -112,7 +112,10 @@ export function isThirdPartyIcon(src) {
  * 这个**自定义**图标地址能不能真的拿来用。
  *
  * 允许：
- *   - `data:image/…` —— 用户自己上传的（`BookmarkDialog` / 图标管理走 `readFileAsDataURL`）
+ *   - `data:image/…` —— 用户自己上传的。⚠️ 2026-10-01 起上传改走
+ *     `data/iconStorage.js` 的 `uploadImage()`，**登录后存的是 Storage 公开 URL**，
+ *     只有未登录（纯本机模式）才回落 dataURL。所以这个分支现在只服务
+ *     本机模式的老数据与老用户，但仍然必须保留。
  *   - 站内相对路径（`/static/…`、`./…`）
  *   - `https://` 且不是第三方 favicon 服务
  *

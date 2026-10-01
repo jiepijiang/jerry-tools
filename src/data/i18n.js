@@ -347,6 +347,9 @@ export const messages = {
 
     'toast.saved': '已保存',
     'toast.saveFail': '保存失败',
+    // 上传图片失败。和「保存失败」分开，是因为这两件事的下一步动作不一样：
+    // 保存失败要检查表单，上传失败只要重试。
+    'toast.uploadFail': '图片上传失败，请重试',
     'toast.created': '已创建',
     'toast.createFail': '创建失败',
     'toast.deleted': '已删除',
@@ -728,6 +731,7 @@ export const messages = {
 
     'toast.saved': 'Saved',
     'toast.saveFail': 'Save failed',
+    'toast.uploadFail': 'Image upload failed, please retry',
     'toast.created': 'Created',
     'toast.createFail': 'Create failed',
     'toast.deleted': 'Deleted',

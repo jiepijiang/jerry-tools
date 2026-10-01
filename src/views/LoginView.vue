@@ -10,7 +10,7 @@ import { ADMIN_PASSWORD, isLoggedIn, login, logout, register, updateProfile } fr
 import { state } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
-import { readFileAsDataURL } from '@/utils/helpers'
+import { uploadImage } from '@/data/iconStorage'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -72,9 +72,19 @@ async function onAvatar(e) {
     toast(t('auth.imageTooBig'), 'error')
     return
   }
-  const dataUrl = await readFileAsDataURL(file)
-  await updateProfile({ avatar: dataUrl })
-  toast(t('auth.avatarUpdated'))
+  /*
+   * 已登录才可能走到这里（本页就是登录页的已登录态），所以正常路径一定是
+   * 传到 Storage 拿公开 URL。传失败就报错 —— 不回落 base64，理由见
+   * `data/iconStorage.js` 顶部：悄悄存成 base64 等于把要修的问题又做一遍。
+   */
+  try {
+    const { url } = await uploadImage(file, 'avatar')
+    await updateProfile({ avatar: url })
+    toast(t('auth.avatarUpdated'))
+  } catch (err) {
+    console.warn('[avatar] 上传失败，未写入：', err)
+    toast(t('toast.uploadFail'), 'error')
+  }
 }
 
 const nickname = ref('')

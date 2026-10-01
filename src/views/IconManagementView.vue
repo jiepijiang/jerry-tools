@@ -5,6 +5,9 @@
  * 参考站把它做成独立路由而不是后台里的一个 tab，这里保持一致。
  * 作用：给发现页的站点换自定义图标（上传本地图片 / 粘贴图片地址），
  * 或恢复成自动获取的 favicon。
+ *
+ * ⚠️ 上传走 `uploadImage()`：登录后图会进 Storage，这里只存公开 URL。
+ *    （页面本身仍是 admin 才能写 `discover_sites`，那是既有行为。）
  */
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -13,7 +16,8 @@ import BookmarkIcon from '@/components/BookmarkIcon.vue'
 import { state, updateSite } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
-import { faviconOf, hostOf, isUsableIcon, readFileAsDataURL } from '@/utils/helpers'
+import { uploadImage } from '@/data/iconStorage'
+import { faviconOf, hostOf, isUsableIcon } from '@/utils/helpers'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -69,17 +73,16 @@ async function onFile(e) {
     toast(t('iconMgmt.invalidImage'), 'error')
     return
   }
-  let dataUrl = ''
+  let url = ''
   try {
-    dataUrl = await readFileAsDataURL(file)
-  } catch {
-    dataUrl = ''
-  }
-  if (!dataUrl) {
-    toast(t('iconMgmt.invalidImage'), 'error')
+    ;({ url } = await uploadImage(file, 'icon'))
+  } catch (err) {
+    // 已登录却传不上去 → 报错，**不**回落 base64（理由见 iconStorage.js）
+    console.warn('[icon] 上传失败，未写入：', err)
+    toast(t('toast.uploadFail'), 'error')
     return
   }
-  const ok = await updateSite(site.id, { icon: dataUrl })
+  const ok = await updateSite(site.id, { icon: url })
   toast(ok ? t('iconMgmt.uploadOk') : t('toast.saveFail'), ok ? 'success' : 'error')
 }
 

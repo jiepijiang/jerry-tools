@@ -24,6 +24,13 @@
 > `004-discover-collects.sql` 同理，**老库也要单独跑一次** —— 详见「八、收藏数」。
 > 不跑的话「收藏数」就是死值，点了收藏数字不动。
 > ✅ 本项目已跑过。
+>
+> `005-user-assets-storage.sql` 建 Storage bucket `user-assets` + 4 条策略 —— 详见「十、图片存储」。
+> 不跑的话「上传图片」会失败（已登录时直接 toast 报错，**不会**悄悄回落 base64）。
+> ✅ 本项目已于 2026-10-01 跑过（`bucket_ok = true` / `policies = 4`）。
+>
+> ⚠️ **005 必须用 postgres 身份跑（SQL Editor）** —— 前端那个 anon key **建不了 bucket**。
+> 这不是配置问题，是设计如此。
 
 ---
 
@@ -517,3 +524,82 @@ node --import ./register.mjs transfer-verify.mjs      # 32 条
 # 浏览器端（先起 dev server 5174）：自动迁移 + 手动上传 + 导出恢复
 node transfer-ui.mjs                                  # 28 条
 ```
+
+---
+
+## 十、图片存储（Storage）
+
+依赖一次迁移：**`005-user-assets-storage.sql`**（2026-10-01 已跑）。
+
+### 建了什么
+
+| 对象 | 内容 |
+| --- | --- |
+| bucket `user-assets` | `public = true`（对象可免鉴权读）、`file_size_limit = 1MiB`、白名单 `image/webp` / `png` / `jpeg` / `svg+xml` |
+| 策略 ×4 | 1 条公开读 + `insert` / `update` / `delete` 各一条 |
+
+路径按用户分目录：
+
+```
+user-assets/{auth.uid()}/{kind}-{sha256前16位}.{ext}
+```
+
+策略判据只有一条 —— `(storage.foldername(name))[1] = auth.uid()::text`，
+**只看第一段目录是不是本人 uid**。所以新增一种图片（比如以后要存封面图）
+**不用改策略**，只要放进自己的 uid 目录就行。
+
+反过来按业务分目录的话，每加一种图就要加一条策略，迟早漏一条 ——
+而漏了的表现是「上传成功但谁也看不见」。
+
+### 为什么 insert / update / delete 三条都要
+
+| 少哪条 | 表现 |
+| --- | --- |
+| 少 `update` | 同名覆盖（`upsert`）失败 → **「换头像没反应」** |
+| 少 `delete` | 删不掉旧图 → 存储只涨不跌 |
+
+### ⚠️ 验证时最容易踩的坑：`GET /storage/v1/bucket` 是假阴性
+
+**它只对 service_role 开。** anon 和**已登录用户**都返回 `200 []`，
+单 bucket 端点还报 `400 NoSuchBucket` —— bucket 明明建成了也看不见
+（`storage.buckets` 有 RLS，没有给这两种身份的 select 策略）。
+
+`POST /object/list/<bucket>` 也区分不了：打一个不存在的 bucket 同样返回 `200 []`。
+
+**所以别用它判断「迁移跑了没」。** 唯一判据是真上传一次，
+或读一个**已知存在**的对象的公开 URL：
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' \
+  "{SUPABASE_URL}/storage/v1/object/public/user-assets/<某个真实路径>"
+```
+
+跑完迁移后，迁移文件最后那句自检会直接给答案：
+
+```
+bucket_ok | policies
+----------+---------
+true      | 4
+```
+
+### 怎么验的
+
+```bash
+# dev（要 dev server 5174）
+node icon-storage.mjs                # 24 条：降级 / 上传 / 失败不回落 / UI / 越权写
+
+# dist（先 npm run build，再起静态服务器 4174）
+node _static.mjs 4174 ../jerry-tools/dist
+node dist-icon-storage.mjs           # 8 条：真产物里上传 + 解码页面 <img>
+```
+
+⚠️ **dist 层别用 `vite preview`** —— 它在这个沙箱里静默挂起（不打印、不监听）。
+用 `_static.mjs`。
+
+### 已知限制
+
+- 存量 base64 图不迁移（`data:image/…` 继续能用，`isUsableIcon` 本来就允许）。
+- 换图后**旧对象不回收**（文件名带内容哈希 → 新路径），存储只涨不跌。
+- 白名单保留 `image/svg+xml`：正常路径只产出 WebP，svg 是转码失败时的降级，
+  而 `BookmarkDialog` 的 `accept` 里本来就有它。理由与风险评估见
+  主 `README.md` 的「上传的图改走 Storage」一节。

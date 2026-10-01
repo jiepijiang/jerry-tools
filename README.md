@@ -553,7 +553,7 @@ const SEED_ADDITIONS = {
 | 4 | `useStore` 写操作 | **全量重写（约 20 个函数）** | ❌ **评估错了** —— 一行没改 |
 | 5 | 认证 | 1 个文件重写 | ✅ `useAuth.js` |
 | 6 | 多端同步 | `supabase.channel()` 订阅 | ✅ 做了 —— `useRealtime.js` + `migrations/003` |
-| 7 | 图标存储 | 改走 Storage | ⏸ **没做**（当前仍存 base64 / URL） |
+| 7 | 图标存储 | 改走 Storage | ✅ **2026-10-01 补做** —— 见下方「上传的图改走 Storage」 |
 | 8 | 浏览量计数 | 1 个 SQL 函数 | ✅ `increment_discover_site_views` |
 | 9 | 管理后台权限 | 改判断逻辑 | ✅ 走 `profiles.role` |
 | 10 | 分享页 | 1 个视图 | ⚠️ **改成函数**（理由见下） |
@@ -595,14 +595,132 @@ const SEED_ADDITIONS = {
 
 ### 没做的
 
-- **图标改走 Storage**：上传的图标仍以 base64 存在库里。
-  图标一般只有几 KB，暂时不值得为它引入 Storage 的权限模型。
+- ~~**图标改走 Storage**~~ —— **2026-10-01 已做**，见下一节。
 - **发现页的浏览 / 收藏数不做实时**：`discover_sites` 是全局表，`views` 每次点击都变，
   订阅它等于给所有在线设备广播每一次点击。需要时刷新即可。
   （**同一账号的另一台设备**不算 —— 那边走 `favorites` 的实时事件补计数，
   见下方「收藏数是怎么算的」。**别人**的收藏仍然要等下次全量读。）
 - **发送确认邮件**：默认 SMTP 限流很严，索性关掉了邮箱确认
   （`mailer_autoconfirm: true`）。要发邮件得自备 SMTP。
+
+---
+
+## 上传的图改走 Storage（2026-10-01）
+
+上面那张表里的第 7 项。三处上传（头像 / 书签图标 / 站点图标）原先一律
+`readFileAsDataURL()` 转 base64 **写进业务表**，现在改成传 Supabase Storage、
+业务表里只存一个几百字节的**公开 URL**。
+
+### 形状
+
+```
+user-assets/{auth.uid()}/{kind}-{sha256前16位}.{ext}
+                    ↑ kind = icon | avatar
+```
+
+- **上传前一律先缩到最长边 256px、转 WebP**（`src/data/iconStorage.js`）。
+  不缩的话只是把「大 base64」换成「大文件」，问题没解决。
+  图标最大渲染 52px、头像 96px，3× DPR 也就 288 —— 256 够用。
+- 文件名带内容哈希 → 同一张图重复上传落到同一路径，天然去重。
+- 策略只看**第一段目录是不是本人 uid**（`(storage.foldername(name))[1]`），
+  所以**新增一种图片不用改策略**。反过来按业务分目录的话，每加一种图就要加一条策略，
+  迟早漏一条 —— 而漏了的表现是「上传成功但谁也看不见」。
+- 写策略 **insert / update / delete 三条都要**（`supabase/migrations/005-user-assets-storage.sql`）：
+  少 update → upsert 失败，表现是「换头像没反应」；少 delete → 旧图删不掉，存储只涨不跌。
+
+### 降级路径是设计，不是失败
+
+| 情况 | 行为 |
+| --- | --- |
+| 未登录 / 没配后端 | 返回 **dataURL**（纯本机模式没有云端，这是唯一能存的形态） |
+| 已登录但传不上去 | **抛错**，由调用方 toast |
+
+这两种必须分开。已登录却传失败（网络 / 策略配错 / bucket 不存在）时回落到 base64，
+就是**把要修的问题又做了一遍**，而且没人会发现 —— 表现是「图标设上了」。
+对齐本项目那条「写失败却报『成功』是违约，不是设计取舍」。
+
+### ⚠️ 「bucket 建了没有」不能用 `GET /storage/v1/bucket` 判断
+
+我一开始把这条当验证探针给了出去，**它是假阴性**。实测（`_bucket-visibility.mjs`）：
+
+| 身份 | `GET /storage/v1/bucket` | `GET /storage/v1/bucket/user-assets` |
+| --- | --- | --- |
+| anon key | `200 []` | `400 NoSuchBucket` |
+| **已登录用户** | `200 []` | `400 NoSuchBucket` |
+| 不带 `Authorization` 头 | `400 headers must have required property 'authorization'` | 同左 |
+
+bucket 明明建成了、上传也成功，这两种身份**都看不到它** —— `storage.buckets` 有 RLS，
+而它只对 service_role 开。`POST /object/list/<bucket>` 也区分不了（打不存在的 bucket
+同样返回 `200 []`）。
+
+**结论：anon / 登录用户都没有「bucket 存不存在」的廉价探针。**
+唯一判据是**真上传一次**，或者读一个**已知存在**的对象的公开 URL：
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' \
+  "{SUPABASE_URL}/storage/v1/object/public/user-assets/<某个真实路径>"
+```
+
+### 怎么验的
+
+| 层 | 脚本 | 结果 |
+| --- | --- | --- |
+| dev（源码，动态 import） | `/tmp/jerry-sb/icon-storage.mjs` | **24 / 0** |
+| dev（另两个上传点） | `/tmp/jerry-sb/icon-upload-points.mjs` | **21 / 0** |
+| dist（真 build + 真产物） | `/tmp/jerry-sb/dist-icon-storage.mjs` | **8 / 0** |
+| 造红 | 上面那份 dev 探针 | **17 / 7**，7 条全部预期 |
+
+- dev 探针覆盖 S1 未登录降级 / S0 登录 / S2 已登录走 Storage / S3 失败不回落 /
+  S4 UI 级真点按钮 / **S5 越权写**。
+- **`icon-upload-points.mjs` 是补出来的第二个探针**：第一版只在 UI 层覆盖了
+  `LoginView` 的头像上传，而这次动了**三处**（`LoginView` / `BookmarkDialog` /
+  `IconManagementView`）—— 典型的「改了三处、只验了一处」，剩下两处坏了不会有人知道。
+  - `BookmarkDialog` 可以**端到端**验（书签写的是自己的表），实测保存后库里
+    `bookmarks.icon` 就是 Storage 公开 URL。
+  - `IconManagementView` 写的是全局的 `discover_sites`，要 admin，而测试账号是
+    `role=user` → 库写入本来就该失败。所以改成**抓网络**：点上传后必须真的发出
+    `POST /storage/v1/object/user-assets/{uid}/icon-*.webp` 且 200。
+    这正好覆盖改的那一行（`uploadImage(file,'icon')` 有没有被调到）。
+    **顺带挖出一个既有 bug** —— 见「待办」里那条「界面报『图标已更新』但库里一行都没变」。
+- **S5 是这次补的**：前面只验了「自己能写自己那一层」这个 happy path。
+  如果有人把写策略改成 `using (true)`，happy path 照样全绿，而任何人都能往
+  别人的目录里塞文件 —— 「策略写错了」和「策略不存在」在正向测试里长得一模一样，
+  必须**反向**试一次。判据带对照组（往自己目录写必须成功），
+  否则拿到的 4xx 可能只是因为请求本身写错了。
+  实测越权 → `403 new row violates row-level security policy`。
+- **造红映射**（改 `src/data/iconStorage.js` 再跑 dev 探针）：
+
+  | 造的因 | 变红的断言 |
+  | --- | --- |
+  | 关掉缩放（`scale = 1`） | 「降级路径也做了缩放」·「降级路径最长边 ≤256」·「上传的已经是转码后的小图」·「云端最长边 ≤256」 |
+  | 上传失败回落 dataURL | 「上传失败时抛错」·「错误码是 upload-failed」·「**没有**回落成 dataURL」 |
+
+- dist 层不看界面自述：**解码页面上的 `<img>`**（`naturalWidth > 0`）+
+  直接查库。实测解码出 `256×154` —— 证明缩放在生产包里也生效。
+  只比 URL 字符串挡不住「URL 对但取不到图」。
+
+> **dist 层为什么必须单独跑一遍**：dev 走 `import('/src/data/iconStorage.js')`
+> 动态加载源码，dist 是 rollup 打过包、压过名的另一份代码。
+> 典型的「dev 绿 dist 红」：动态 import 路径、`import.meta.env` 注入、
+> 或只在生产分支里走到的降级路径。
+
+> ⚠️ **别用 `vite preview` 跑 dist 层** —— 它在这个沙箱里**静默挂起**
+> （不打印、不监听，`lsof` 也看不到）。用 `/tmp/jerry-sb/_static.mjs`
+> （30 行的静态服务器 + SPA 回落 + 正确 Content-Type）。
+
+### 已知限制
+
+- **存量 base64 图不迁移**：老数据里的 `data:image/…` 继续能用
+  （`isUsableIcon` 本来就允许），只是不享受新链路。换图之后才会走 Storage。
+- **旧文件不回收**：文件名带内容哈希，换图 = 新路径 = 新对象，**旧对象留在 bucket 里**。
+  存储只涨不跌。现在不做回收（要做的话得在更新时比对新旧 URL 并删旧对象）。
+- **白名单里保留 `image/svg+xml`**：正常路径只会产出 WebP（前端强制转码），
+  png / jpeg / svg 是**转码失败时的降级** —— `BookmarkDialog` 的文件框
+  `accept` 里本来就有 svg，而 canvas 不一定能光栅化 SVG（没有内在尺寸的解不开）。
+  不收它 = 把一个「本来能用」的格式变成「上传失败」，那是回归。
+  风险可接受：图片挂在 `<ref>.supabase.co`，与本站**不同源**，
+  本站一律 `<img src>` 渲染，不执行里面的脚本。
+  真要再收紧，正确做法是「前端强制光栅化 + 失败就报错」，而不是在白名单里悄悄砍掉一个已支持的格式。
 
 ---
 
@@ -1817,7 +1935,38 @@ Error: Sensitive content approval timed out. The operation was not authorized an
       用 `addInitScript` 拦 `fetch` 制造写失败），dev / dist 子路径 / 线上均 **35 / 0**；
       造红两处（去掉返回值检查 **31 / 4**、去掉 `write_failed` 分支 **33 / 2**）。
       **结论：这三行是对的，一处不用改。** 详见「本机 → 云端的搬运」一节。
-- [ ] 图标改走 Supabase Storage（当前仍存 base64）
+- [ ] **🔴 界面报「图标已更新」，但库里一行都没变**（2026-10-01 发现，**既有 bug，与 Storage 改动无关**）
+      `src/data/adapters/cloud.js` 的 `writeSites()` 只在 `if (error)` 时判失败，
+      而 **PostgREST 对「被 RLS 的 `USING` 挡掉的 UPDATE」返回的是成功状态码** ——
+      实测（`/tmp/jerry-sb/_rls-update-silent.mjs`）：
+
+      | 请求 | 返回 |
+      | --- | --- |
+      | PATCH `discover_sites`（被 RLS 挡） | **HTTP 204**，body 空 |
+      | 同上 + `return=representation` | **HTTP 200** + `[]` |
+      | 同上 + `count=exact` | `content-range: */0` ← **0 行** |
+      | 对照 PATCH `profiles`（有权限） | `content-range: 0-0/1` ← 1 行 |
+
+      于是 `ok` 保持 `true` → `snapshot.set()` 照常更新 → 界面 toast「图标已更新」。
+      **而 `writeSites()` 的注释里早就写着「非 admin 会被 RLS 静默挡掉」——
+      注释承认了静默，代码却把它当成成功返回。**
+      这正是本项目那条「写失败却报『成功』是违约，不是设计取舍」。
+
+      可触达性：`/icon-management` 和 `/admin` **都没有路由守卫**
+      （`src/router/index.js` 里 `meta` 只有 `title`），任何登录用户都能进去点。
+
+      修法（方向）：写的时候带 `Prefer: return=representation`，
+      用「返回了几行」当判据 —— 0 行 = 没写进去 = `ok = false`，让 `withRollback` 回滚。
+      `insert` / `delete` 同样要查（`delete` 被 RLS 挡也是 204）。
+      ⚠️ 改这里要连带跑 `verify-rls.mjs` 和 `icon-upload-points.mjs`。
+- [x] **图标改走 Supabase Storage**（2026-10-01）
+      头像 / 书签图标 / 站点图标三处上传，从「base64 写进业务表」改成
+      「传 Storage + 只存公开 URL」。新增 `src/data/iconStorage.js` 与
+      `supabase/migrations/005-user-assets-storage.sql`。
+      探针 dev **24 / 0**、dist **8 / 0**、造红 **17 / 7**（7 条全预期）。
+      顺带纠正了一条**我给出过的假阴性探针** —— `GET /storage/v1/bucket`
+      对 anon 和登录用户都返回 `[]`，用它判断「迁移跑了没」会永远以为没跑。
+      详见「上传的图改走 Storage」一节。
 - [x] **书签跨分类拖拽 + 视觉反馈**（2026-09-24）
       顺带修掉了一个**比待办里写的严重得多**的真 bug ——
       原来卡片**根本没接上拖拽**（拖不动、落不下、拖了没反应，只有
