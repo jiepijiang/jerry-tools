@@ -587,14 +587,16 @@ true      | 4
 ```bash
 # dev（要 dev server 5174）
 node icon-storage.mjs                # 24 条：降级 / 上传 / 失败不回落 / UI / 越权写
+node icon-upload-points.mjs          # 21 条：另两个上传点（BookmarkDialog / 图标管理页）
 
 # dist（先 npm run build，再起静态服务器 4174）
-node _static.mjs 4174 ../jerry-tools/dist
+node serve-static.mjs ../jerry-tools/dist /jerry-tools/ 4174
 node dist-icon-storage.mjs           # 8 条：真产物里上传 + 解码页面 <img>
 ```
 
-⚠️ **dist 层别用 `vite preview`** —— 它在这个沙箱里静默挂起（不打印、不监听）。
-用 `_static.mjs`。
+⚠️ **dist 层别用 `vite preview`** —— 它在这个沙箱里静默挂起（不打印、不监听），
+而且它把 `/assets/*.js` 也回退成 index.html，「产物缺文件」就永远测不出来。
+用 `serve-static.mjs`。
 
 ### 已知限制
 

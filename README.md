@@ -705,8 +705,14 @@ curl -o /dev/null -w '%{http_code}\n' \
 > 或只在生产分支里走到的降级路径。
 
 > ⚠️ **别用 `vite preview` 跑 dist 层** —— 它在这个沙箱里**静默挂起**
-> （不打印、不监听，`lsof` 也看不到）。用 `/tmp/jerry-sb/_static.mjs`
-> （30 行的静态服务器 + SPA 回落 + 正确 Content-Type）。
+> （不打印、不监听，`lsof` 也看不到），而且它把所有路径都回退成 `index.html`，
+> 连 `/assets/*.js` 也回退，于是「产物缺文件」这类问题永远测不出来。
+> 用 **`/tmp/jerry-sb/serve-static.mjs`**（2026-09-29 就为这个写的，
+> 只有「路径不是真实文件」时才回退）：
+>
+> ```bash
+> node serve-static.mjs <dist目录> /jerry-tools/ 4174
+> ```
 
 ### 已知限制
 
