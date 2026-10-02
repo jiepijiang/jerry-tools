@@ -1390,6 +1390,106 @@ const all = supabaseConfigured
 
 ---
 
+## 路由守卫（`/admin` / `/icon-management`，2026-10-02）
+
+### 之前是什么样
+
+`src/router/index.js` 里那两个路由的 `meta` **只有 `title`，没有任何守卫** ——
+任何登录用户（甚至未登录）都能打开，看到一屏他一个字都写不进去的按钮。
+
+它和上一节那个 bug 是一对：`discover_sites` 的写策略只放行 admin，
+非 admin 点下去的表现正是「**界面报成功、库里没变**」。
+根因（`writeSites()`）已经修了，这节补的是另一半 —— **干脆别让人进去**。
+
+### ⚠️ 守卫是「体验」，不是「安全」
+
+真正的权限判断在**数据库的 RLS** 上。绕过守卫（改 JS、直接打 REST）也做不成任何事，
+因为策略会挡。守卫的目标只是「**别让人看到一个他什么也做不了的页面**」。
+
+### 规则
+
+| 情况 | 行为 |
+| --- | --- |
+| 没配 Supabase（本机模式） | **放行** —— 见下 |
+| 配了、未登录 | 跳 `/login?redirect=<原路径>` |
+| 配了、已登录但不是 admin | 弹回首页 + 提示「没有权限访问这个页面」 |
+| 是 admin | 放行 |
+
+### 🔴 本机模式为什么必须放行
+
+本地模式的注册函数 `localRegister()` **永远写 `isAdmin: false`** ——
+也就是说本机模式下**没有任何人能是 admin**。真按 `isAdmin` 拦，
+**站长自己在没配后端的环境里也进不去自己的后台**。
+本机模式真正的闸是 `AdminView` 里的口令（`ADMIN_PASSWORD`）。
+
+### 🔴 不要加「已登录就别停在 /login」这条规则
+
+`/login` 在已登录时是**个人资料页** —— 头像上传就在那儿。
+把它跳走会直接废掉换头像。`route-guard.mjs` 的 S7 专门盯着这条，别删。
+
+### `?redirect=` 与开放重定向
+
+登录页认 `?redirect=`，登录后跳回**来处**（不认的话用户还得自己再点一次）。
+参数过 `safeRedirect()`（在 `utils/helpers.js`）：
+
+- 只收以**单个** `/` 开头的路径；
+- `//evil.com` 挡掉 —— 浏览器把它当**协议相对 URL**，跳过去就是开放重定向；
+- `/\evil.com` 也挡掉 —— 有些浏览器把 `\` 归一成 `/`。
+
+⚠️ 放在 `helpers` 而不是 `router` 里：`LoginView` 也要用，
+从 `@/router` 反向 import 会绕成一个环。
+
+### 怎么验的
+
+探针 `/tmp/jerry-sb/route-guard.mjs`：
+
+| 层 | 命令 | 结果 |
+| --- | --- | --- |
+| dev | `node route-guard.mjs http://127.0.0.1:5174/ <本机模式 base>` | **36 / 0 / 0** |
+| dist | `node route-guard.mjs http://127.0.0.1:4177/jerry-tools/ <本机模式 base>` | **29 / 0 / 1 跳过** |
+
+覆盖 S1/S2 未登录跳登录并带 `redirect` · S3 公开页不被跳 · S4 管理员放行 ·
+S5/S6 非管理员弹回 + 提示 · S7 `/login` 资料页没被跳走 · S8 开放重定向冒烟 ·
+**S8b `safeRedirect` 单元断言** · S9 登录后跳回来处 · **S10 本机模式放行**。
+
+- **S4 用的是夹具**：项目里没有可用的管理员账号
+  （`LoginView.fillAdmin()` 填的 `admin@jerry.tools` 在云端**不存在**，
+  本地模式的 `localRegister` 又永远写 `isAdmin: false`）。
+  夹具只改一个字段（`role → admin`），其余都是真响应 ——
+  它验的是「`isAdmin` 为真时守卫放行」这一条分支，不是整套管理员权限。
+  ⚠️ 夹具第一版按**对象**改响应，**0 命中** —— 实测这个版本的 `maybeSingle()`
+  请求头 Accept 是通配，也就是**拉数组再在客户端取第一个**。
+  改成数组分支后才生效。
+- **S10 需要一个不注入 `VITE_SUPABASE_*` 的构建**：
+  ```bash
+  VITE_SUPABASE_URL= VITE_SUPABASE_ANON_KEY= npm run build -- --outDir dist-nosb --emptyOutDir
+  node serve-static.mjs <dist-nosb> /jerry-tools/ 4176
+  ```
+  （验完记得删掉 `dist-nosb` —— `.gitignore` 里只有 `dist`，没有它。）
+
+### 造红两次
+
+| 造的因 | 结果 |
+| --- | --- |
+| `beforeEach` 直接 `return true` | **15 / 10**，10 条红正好是守卫相关的（S1/S2/S5/S6/S9）；S4/S7/S8 保持绿 |
+| `safeRedirect` 改成原样返回 | **29 / 3**，红的是 S8b 的三条 |
+
+#### 🔴 顺带抓到一条**假绿**：S8 的端到端断言判不出 `safeRedirect` 坏没坏
+
+第一次造红（把 `safeRedirect` 改成原样返回）**全绿**。原因：
+`router.push('//evil.com')` 在 vue-router 里被当成**路径**，匹配不上任何路由 →
+落到 catch-all `/:pathMatch(.*)*` → 又跳回 `/`。
+「落点还是首页」这件事，**坏掉的版本也能满足**。
+
+所以真正能判别的断言必须打在**纯函数**上（S8b）。
+S8 那两条保留为**冒烟**，并在注释里写明了它判不出什么。
+
+> 这条值得单独记：**「端到端看起来对」不等于「这条断言有判别力」。**
+> 只有造红能分辨。顺带一提，S8b 用动态 import 是安全的 ——
+> `safeRedirect` 是纯函数，不会踩「HMR 后拿到另一个模块实例」那个坑。
+
+---
+
 ## 读不出来 ≠ 没有数据（`seedIfEmpty` 的判据）
 
 上一轮审的是**写**路径（写失败却报成功），这一轮审它的镜像：**读**路径。
@@ -2018,6 +2118,22 @@ Error: Sensitive content approval timed out. The operation was not authorized an
 
 ## 待办
 
+- [x] **`/admin` 和 `/icon-management` 的路由守卫**（2026-10-02）
+      原来这两个路由**没有任何守卫**，任何登录用户都能进，看到一屏他写不进去的按钮。
+      现在：未登录跳 `/login?redirect=`、非管理员弹回首页并提示、**本机模式放行**
+      （本地模式没有任何人会是 admin，拦了会把站长自己锁在外面）。
+      探针 dev **36/0/0**、dist **29/0/1 跳过**；造红两次（守卫放行 → 10 红、
+      `safeRedirect` 返原值 → 3 红）。详见「路由守卫」一节。
+- [ ] **🔴 已登录时整页加载要 6~8 秒才挂载，期间是白屏**（2026-10-02 发现，**既有问题**）
+      现象：登录状态下刷新任意页面，`#app` 在 6~8 秒内一直是空的。
+      `main.js` 的 `bootstrap()` 是串行 await
+      （`initSettings` → `initAuth`[getSession + 读 profiles + 迁移] →
+      `initStore`[一次全量读，实测十几发请求] → 才 mount），
+      网络一抖就拖长。**探针等 6s 得到 `bodyLen=0`、等 7s 得到 1906 ——
+      差 1 秒就能把「守卫把页面弄白了」这个结论带反**（这次真踩了）。
+      未登录时不走这条路（`initAuth` 提前 return），所以只影响已登录用户。
+      方向：给 `bootstrap()` 加个「最多等 N 秒就先把壳挂上」的超时，
+      或者先 mount、再在后台把数据补上（骨架屏）。
 - [x] 接 Supabase：账号体系、跨设备同步、分享页、网站审核真正落库
 - [x] 实时多端同步（`supabase.channel()` 订阅表变更）
 - [x] 发现页的 `collects` 收藏数接真实数据（`favorites` 触发器维护，见「收藏数是怎么算的」）

@@ -4,14 +4,16 @@
  * 未登录时显示登录注册表单；已登录时显示资料编辑（头像、昵称）与账号信息。
  */
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { ADMIN_PASSWORD, isLoggedIn, login, logout, register, updateProfile } from '@/composables/useAuth'
 import { state } from '@/composables/useStore'
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
 import { uploadImage } from '@/data/iconStorage'
+import { safeRedirect } from '@/utils/helpers'
 
+const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 
@@ -41,7 +43,17 @@ async function submit() {
         : await register(form.value)
     if (res.ok) {
       toast(mode.value === 'login' ? t('auth.login') : t('auth.register'))
-      router.push('/')
+      /**
+       * 登录后跳回**来处**。
+       *
+       * 路由守卫拦下未登录的人时，会带上 `?redirect=<原路径>`（见 `@/router`），
+       * 比如直接打开 `/admin` 会被送到 `/login?redirect=/admin`。
+       * 不认这个参数的话，登录完落回首页，用户还得自己再点一次。
+       *
+       * ⚠️ 必须过 `safeRedirect()` —— 只收站内路径，
+       *    `?redirect=//evil.com` 是**开放重定向**。
+       */
+      router.push(safeRedirect(route.query.redirect) || '/')
     } else {
       error.value = ERROR_TEXT[res.error] || '操作失败'
     }

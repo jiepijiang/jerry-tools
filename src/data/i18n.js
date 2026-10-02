@@ -368,6 +368,9 @@ export const messages = {
     'feedback.statusClosed': '已关闭',
     'feedback.noContact': '未留联系方式',
 
+    // 路由守卫拦下非管理员时的提示（见 src/router/index.js）
+    'route.noPermission': '没有权限访问这个页面',
+
     'toast.saved': '已保存',
     'toast.saveFail': '保存失败',
     // 上传图片失败。和「保存失败」分开，是因为这两件事的下一步动作不一样：
@@ -773,6 +776,9 @@ export const messages = {
     'feedback.statusReplied': 'Replied',
     'feedback.statusClosed': 'Closed',
     'feedback.noContact': 'No contact left',
+
+    // Shown when the route guard bounces a non-admin (see src/router/index.js)
+    'route.noPermission': 'You do not have access to this page',
 
     'toast.saved': 'Saved',
     'toast.saveFail': 'Save failed',

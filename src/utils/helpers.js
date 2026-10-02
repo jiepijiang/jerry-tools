@@ -276,3 +276,21 @@ export function formatDate(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
+
+/**
+ * 把 `?redirect=` 洗成「站内路径」，洗不出来就返回空串。
+ *
+ * 只收以**单个** `/` 开头的路径：
+ *   · `//evil.com` —— 浏览器会当成**协议相对 URL**，跳过去就是开放重定向；
+ *   · `/\evil.com` —— 有些浏览器把它同样当协议相对（`\` 会被归一成 `/`）。
+ * 这两个必须挡掉，其余（`/admin`、`/discover?x=1`）放行。
+ *
+ * 放在 helpers 而不是 router 里：`LoginView` 也要用，
+ * 从 `@/router` 反向 import 会绕成一个环。
+ */
+export function safeRedirect(v) {
+  const s = typeof v === 'string' ? v : ''
+  if (!s.startsWith('/')) return ''
+  if (s.startsWith('//') || s.startsWith('/\\')) return ''
+  return s
+}
