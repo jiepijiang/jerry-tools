@@ -99,6 +99,20 @@ const feedbackList = computed(() => state.feedback)
 
 /* ---------------------------------------------------------------- 操作 */
 
+/*
+ * ⚠️ 这一组写操作**必须看返回值**。
+ *
+ * `updateSite` / `deleteSite` 写的是全局表 `discover_sites`，而它的写策略
+ * 只放行 admin（`using (public.is_admin())`）。非 admin 的写**不报错**，
+ * 只是影响 0 行 —— 见 `adapters/cloud.js` 的 `writeSites()` 顶部那段表。
+ *
+ * 所以 `await updateSite(...)` 之后**无条件** `toast('已通过')` 就是
+ * 「写失败却报成功」：界面说成功，刷新一下发现状态根本没变。
+ * 对齐本项目那条「写失败却报『成功』是违约，不是设计取舍」。
+ *
+ * 判据统一是 `ok ? 成功文案 : toast.saveFail`。
+ */
+
 function unlock() {
   if (checkAdminPassword(password.value)) {
     unlocked.value = true
@@ -109,18 +123,18 @@ function unlock() {
 }
 
 async function approve(s) {
-  await updateSite(s.id, { status: 'approved' })
-  toast(t('discover.approved'))
+  const ok = await updateSite(s.id, { status: 'approved' })
+  toast(ok ? t('discover.approved') : t('toast.saveFail'), ok ? 'success' : 'error')
 }
 
 async function reject(s) {
-  await updateSite(s.id, { status: 'rejected' })
-  toast(t('discover.rejected'))
+  const ok = await updateSite(s.id, { status: 'rejected' })
+  toast(ok ? t('discover.rejected') : t('toast.saveFail'), ok ? 'success' : 'error')
 }
 
 async function removeSite(s) {
-  await deleteSite(s.id)
-  toast(t('toast.deleted'))
+  const ok = await deleteSite(s.id)
+  toast(ok ? t('toast.deleted') : t('toast.saveFail'), ok ? 'success' : 'error')
 }
 
 async function dedupe() {
@@ -181,13 +195,13 @@ async function saveNote() {
 
 /* —— 图标 —— */
 async function restoreIcon(s) {
-  await updateSite(s.id, { icon: '' })
-  toast(t('admin.iconRestore'))
+  const ok = await updateSite(s.id, { icon: '' })
+  toast(ok ? t('admin.iconRestore') : t('toast.saveFail'), ok ? 'success' : 'error')
 }
 
 async function setIcon(s, url) {
-  await updateSite(s.id, { icon: url })
-  toast(t('toast.updated'))
+  const ok = await updateSite(s.id, { icon: url })
+  toast(ok ? t('toast.updated') : t('toast.saveFail'), ok ? 'success' : 'error')
 }
 
 /* —— 反馈 —— */

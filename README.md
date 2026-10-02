@@ -1287,6 +1287,96 @@ const all = supabaseConfigured
   除 `useAuth` 那 3 处外都有动态覆盖。留言（notes）走的是 `withRollback`，
   与书签同一条路径，不需要单独场景。
 
+### 第 4 处（2026-10-01）：被 RLS 挡掉的写，连 `error` 都没有
+
+前面 3 处都是「返回值被丢掉」。这一处不一样 —— **返回值是对的，
+是底层给的信号本身就没有**。
+
+`src/data/adapters/cloud.js` 的 `writeSites()` 写全局表 `discover_sites`，
+而那张表的 update / delete 策略只放行 admin。非 admin 的写：
+
+| 请求 | 返回 |
+| --- | --- |
+| `PATCH` 被 RLS 的 `USING` 挡掉 | **HTTP 204**，body 空 |
+| 同上 + `return=representation` | **HTTP 200** + `[]` |
+| 同上 + `count=exact` | 响应头 `content-range` 的**总数是 0** |
+| 对照：有权限的表 | 同一响应头的总数是 **1** |
+
+所以 `const { error } = await ...; if (error) { ok = false }` **一个字都不会说**，
+`ok` 保持 `true` → `snapshot.set()` 照常更新 → 界面 toast「图标已更新」，
+而库里一行都没变。
+
+**这段代码的注释里早就写着「非 admin 会被 RLS 静默挡掉」——
+注释承认了静默，代码却把它当成成功返回。**
+
+修法是两层，缺一层界面就照样说谎：
+
+1. **根因**：update / delete 改成 `.select('id')` 把**受影响的行**要回来，
+   0 行 = 没写进去 = `ok = false` → `withRollback` 回滚 + 界面报失败。
+   ⚠️ `insert` **不用**这一套 —— 被 RLS 的 `with check` 拒掉时它真的会报错，
+   只有 update / delete 的 `using` 挡才是静默的。
+2. **表层**：`AdminView` 的 `approve` / `reject` / `removeSite` / `restoreIcon` /
+   `setIcon` 这 **5 处**原来 `await updateSite(...)` 之后**无条件** toast 成功 ——
+   连返回值都不看。改成 `ok ? 成功文案 : toast.saveFail`。
+   （`IconManagementView` 那 3 处本来就是对的。）
+
+**为什么 `insert` 报错、`update` 不报错**这件事本身值得记：
+`with check` 是「不许你造出这样的行」，`using` 是「这行你根本看不见」——
+看不见的行，数据库连「我拒绝了你」都不会说。
+
+#### 探针 `write-sites-honest.mjs`（19 / 0）
+
+| 场景 | 断言 |
+| --- | --- |
+| S-A 非 admin 改全局表 | 提示是**失败** · **没有**谎报成功 · **内存回滚了**（卡片上还是旧图标）· 库里没变 |
+| S-B **对照组**：改自己的书签 | 提示成功 · 库里**真的**多了一行 |
+| S-C 回归：views 自增（RPC） | 库里 +1 · 界面也跟着 +1 |
+| S-D `AdminView` 那 5 处 | 提示失败 · 没有谎报成功 · 库里没变 |
+
+- **S-B 是必需的**：没有它的话，「所有写都报失败」也能让 S-A 全绿。
+  这一组证明 `withRollback` 没把正常路径也判成失败。
+- **S-A 的「内存回滚」是最有判别力的一条** —— 它看的是**卡片上实际渲染的
+  `<img src>`**。造红时它给出的是「卡片显示 `…/user-assets/…`、库里还是旧图标」，
+  正好就是用户看到的现象。
+- **造红两次，两层各自独立变红**：只退回根因 → S-A 的 ①②③ 红；
+  只退回 `AdminView` → S-D 的 ①② 红。这证明两层都被钉住了，
+  不会出现「修了一层、另一层没人管」。
+
+#### 探针自己踩的两个坑（都是「判据没钉住对象」）
+
+1. **按「views 最高的那条」回读** —— 自增后榜首可能换成另一个同分站点，
+   回读到的根本不是同一个对象，断言成了 `260 → 260` 的**假红**。
+   改成按标题（等于按 id）钉住那一条。
+2. **用 `import('/src/composables/useStore.js')` 拿 `state`** ——
+   Vite 在 HMR 之后会给模块 URL 挂 `?t=<时间戳>`，裸 URL 动态 import
+   拿到的是**另一个模块实例**（没跑过 `loadAll`），`state.sites` 是空的。
+   第一次跑碰巧命中同一个实例，之后就全是空数组。
+   改成**走界面点击**，用的是 app 自己那份实例。
+
+#### ⚠️ 还有两处同类隐患（**这次没改，先记着**）
+
+同一张策略表里，**能看见但写不了**的组合还有两组。它们现在不可达，
+但接上写路径的那天会立刻复现同一个 bug：
+
+| 表 | 策略 | 谁能看见但写不了 |
+| --- | --- | --- |
+| `submissions` | `update using (admin or (own and status='pending'))` | 用户自己**已通过**的那条提交 |
+| `feedback` | `update using (admin)` | 用户自己提的反馈 |
+
+- 这两张表的写路径（`persistSubmissions` / `persistFeedback`）
+  **导出了但全仓没有任何调用点**，所以暂时不会触发。
+- ⚠️ 但**通用 `writeCloud` 那条路（`upsert` + `delete`）没有 0 行检查**，
+  只给 `writeSites` 加了。之所以没顺手加：私有表
+  （`categories` / `bookmarks` / `notes` / `visits` / `favorites` /
+  `user_settings` / `share_settings`）的策略是 `user_id = auth.uid()`，
+  **不存在「看得见写不了」**，硬加检查反而会引入假失败
+  （比如另一台设备刚删掉那行 → 影响 0 行 → 误报失败）。
+  所以将来接 `submissions` / `feedback` 时，要么给这两张表单独开检查，
+  要么把它们也挪出通用路径 —— **别直接复用**。
+- 另外 `AdminView.sendReply()` 现在**只改内存、完全不落盘**（`item.replies.push(...)`
+  之后没有任何 `persist`），刷新一次回复就没了。这条是「压根没写」，
+  和上面那个「写了但被静默挡掉」不是一回事，但同一个下午发现的，一起记在这儿。
+
 ---
 
 ## 读不出来 ≠ 没有数据（`seedIfEmpty` 的判据）
@@ -1941,35 +2031,33 @@ Error: Sensitive content approval timed out. The operation was not authorized an
       用 `addInitScript` 拦 `fetch` 制造写失败），dev / dist 子路径 / 线上均 **35 / 0**；
       造红两处（去掉返回值检查 **31 / 4**、去掉 `write_failed` 分支 **33 / 2**）。
       **结论：这三行是对的，一处不用改。** 详见「本机 → 云端的搬运」一节。
-- [ ] **🔴 界面报「图标已更新」，但库里一行都没变**（2026-10-01 发现，**既有 bug，与 Storage 改动无关**）
+- [x] **界面报「图标已更新」，但库里一行都没变**（2026-10-01 发现 + 当天修掉）
       `src/data/adapters/cloud.js` 的 `writeSites()` 只在 `if (error)` 时判失败，
-      而 **PostgREST 对「被 RLS 的 `USING` 挡掉的 UPDATE」返回的是成功状态码** ——
-      实测（`/tmp/jerry-sb/_rls-update-silent.mjs`）：
-
-      | 请求 | 返回 |
-      | --- | --- |
-      | PATCH `discover_sites`（被 RLS 挡） | **HTTP 204**，body 空 |
-      | 同上 + `return=representation` | **HTTP 200** + `[]` |
-      | 同上 + `count=exact` | `content-range: */0` ← **0 行** |
-      | 对照 PATCH `profiles`（有权限） | `content-range: 0-0/1` ← 1 行 |
-
-      于是 `ok` 保持 `true` → `snapshot.set()` 照常更新 → 界面 toast「图标已更新」。
-      **而 `writeSites()` 的注释里早就写着「非 admin 会被 RLS 静默挡掉」——
+      而 **PostgREST 对「被 RLS 的 `USING` 挡掉的 UPDATE」返回的是成功状态码**，
+      只是影响 0 行。于是 `ok` 保持 `true` → `snapshot.set()` 照常更新 →
+      界面 toast「图标已更新」，而库里一行没变。
+      **那段代码的注释里早就写着「非 admin 会被 RLS 静默挡掉」——
       注释承认了静默，代码却把它当成成功返回。**
-      这正是本项目那条「写失败却报『成功』是违约，不是设计取舍」。
 
-      可触达性：`/icon-management` 和 `/admin` **都没有路由守卫**
-      （`src/router/index.js` 里 `meta` 只有 `title`），任何登录用户都能进去点。
+      修复分两层（缺一层界面就照样说谎）：
+      1. **根因** `writeSites()`：update / delete 改成 `.select('id')` 把受影响的行
+         要回来，**0 行 = 没写进去 = `ok = false`**，让 `withRollback` 回滚。
+         （`insert` 不用 —— 被 `with check` 拒掉时它**真的会报错**。）
+      2. **表层** `AdminView`：`approve` / `reject` / `removeSite` / `restoreIcon` /
+         `setIcon` 这 **5 处**原来 `await updateSite(...)` 之后**无条件** toast 成功，
+         连返回值都不看 —— 改成 `ok ? 成功文案 : toast.saveFail`。
 
-      修法（方向）：写的时候带 `Prefer: return=representation`，
-      用「返回了几行」当判据 —— 0 行 = 没写进去 = `ok = false`，让 `withRollback` 回滚。
-      `insert` / `delete` 同样要查（`delete` 被 RLS 挡也是 204）。
-      ⚠️ 改这里要连带跑 `verify-rls.mjs` 和 `icon-upload-points.mjs`。
+      探针 `write-sites-honest.mjs`（**19 / 0**），覆盖 S-A 非 admin 改全局表 /
+      S-B 对照组「有权限的写必须成功」/ S-C 回归「views 自增 RPC 没被带坏」/
+      S-D AdminView 那 5 处。造红两次，**两层各自独立变红**：
+      只退回根因 → S-A 的 ①②③ 红；只退回 `AdminView` → S-D 的 ①② 红。
+      详见「写失败却报『成功』」一节。
 - [x] **图标改走 Supabase Storage**（2026-10-01）
       头像 / 书签图标 / 站点图标三处上传，从「base64 写进业务表」改成
       「传 Storage + 只存公开 URL」。新增 `src/data/iconStorage.js` 与
       `supabase/migrations/005-user-assets-storage.sql`。
-      探针 dev **24 / 0**、dist **8 / 0**、造红 **17 / 7**（7 条全预期）。
+      探针 dev **24 / 0**、另两个上传点 **22 / 0**、dist **8 / 0**、线上 **8 / 0**、
+      造红 **17 / 7**（7 条全预期）。
       顺带纠正了一条**我给出过的假阴性探针** —— `GET /storage/v1/bucket`
       对 anon 和登录用户都返回 `[]`，用它判断「迁移跑了没」会永远以为没跑。
       详见「上传的图改走 Storage」一节。

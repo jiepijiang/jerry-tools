@@ -345,7 +345,29 @@ const SERVER_MANAGED_COLUMNS = new Set(['collects'])
  * 站点是全局数据，普通用户没有 update 权限（RLS 会挡）。
  * 但「浏览量 +1」人人可做 —— 走 `increment_discover_site_views` 这个
  * SECURITY DEFINER 函数。所以这里把「只有 views 变了」的行挑出来走 RPC，
- * 其余（改标题、改分类）留给 admin，非 admin 会被 RLS 静默挡掉。
+ * 其余（改标题、改分类）留给 admin，非 admin 会被 RLS 挡掉。
+ *
+ * ⚠️⚠️ **「被 RLS 挡掉」不会返回 error，只会返回「0 行」** —— 2026-10-01 实测：
+ *
+ *   | 请求                              | 返回                     |
+ *   |-----------------------------------|--------------------------|
+ *   | PATCH 一张写不了的表              | **HTTP 204**，body 空    |
+ *   | 同上 + `return=representation`    | **HTTP 200** + `[]`      |
+ *   | 同上 + `count=exact`              | 响应头 `content-range` 的**总数是 0** |
+ *   | 对照：有权限的表                  | 同一响应头的总数是 **1** |
+ *
+ *   （`content-range` 的格式是 `<起>-<止>/<总数>`；被挡掉时总数写 0，
+ *     有权限时写 1 —— 这是唯一能区分两种情况的信号。）
+ *
+ *   所以 `const { error } = ...; if (error)` **一个字都不会说**，
+ *   `ok` 保持 true → `writeCloud` 更新 snapshot → 界面 toast「已更新」，
+ *   而库里一行都没变。这正是本项目那条「写失败却报『成功』是违约」。
+ *
+ *   修法：写的时候 `.select('id')` 把**受影响的行**要回来，0 行就当失败。
+ *
+ *   `insert` 不用这一套 —— 被 RLS 的 `with check` 拒掉时它**真的会报错**
+ *   （`42501 new row violates row-level security policy`），只有
+ *   update / delete 的 `using` 挡才是静默的。
  */
 async function writeSites(prevRows, nextRows) {
   const prevById = new Map(prevRows.map((r) => [r.id, r]))
@@ -357,7 +379,8 @@ async function writeSites(prevRows, nextRows) {
 
     if (!prev) {
       // 新提交的站点 —— 只有 admin 能直接插 approved，
-      // 普通用户插 pending 由 RLS 放行
+      // 普通用户插 pending 由 RLS 放行。
+      // 被拒会真报错（`with check` 失败），所以这里只判 error 就够。
       const fresh = { ...row }
       for (const c of SERVER_MANAGED_COLUMNS) delete fresh[c]
       const { error } = await supabase.from('discover_sites').insert(fresh)
@@ -380,22 +403,37 @@ async function writeSites(prevRows, nextRows) {
       continue
     }
 
-    // 其余字段的改动只有 admin 能落库
+    // 其余字段的改动只有 admin 能落库。
+    // `.select('id')` 是**必须的**，不是优化 —— 见函数头那段表。
     const patch = {}
     for (const k of changed) patch[k] = row[k]
-    const { error } = await supabase.from('discover_sites').update(patch).eq('id', row.id)
+    const { data, error } = await supabase
+      .from('discover_sites')
+      .update(patch)
+      .eq('id', row.id)
+      .select('id')
     if (error) {
-      console.warn('[cloud] 更新站点失败（多半是权限）：', row.id, error.message)
+      console.warn('[cloud] 更新站点失败：', row.id, error.message)
+      ok = false
+    } else if (!data || data.length === 0) {
+      console.warn('[cloud] 更新站点没有生效（被 RLS 挡掉了，多半不是 admin）：', row.id)
       ok = false
     }
   }
 
-  // 删除同样只有 admin 能做
+  // 删除同样只有 admin 能做，同样会「静默 0 行」
   for (const prev of prevRows) {
     if (nextIds.has(prev.id)) continue
-    const { error } = await supabase.from('discover_sites').delete().eq('id', prev.id)
+    const { data, error } = await supabase
+      .from('discover_sites')
+      .delete()
+      .eq('id', prev.id)
+      .select('id')
     if (error) {
-      console.warn('[cloud] 删除站点失败（多半是权限）：', prev.id, error.message)
+      console.warn('[cloud] 删除站点失败：', prev.id, error.message)
+      ok = false
+    } else if (!data || data.length === 0) {
+      console.warn('[cloud] 删除站点没有生效（被 RLS 挡掉了，多半不是 admin）：', prev.id)
       ok = false
     }
   }
