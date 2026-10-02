@@ -310,9 +310,6 @@ async function seedIfEmpty() {
     return []
   }
 
-  state.categories = await handle(storageKeys.categories, 'array', seedCategories)
-  state.bookmarks = await handle(storageKeys.bookmarks, 'array', seedBookmarks)
-
   /*
    * ⚠️ `sites`（发现页）在**云端模式下不落盘**。
    *    `discover_sites` 是全局公开表，只有 admin 能写；
@@ -321,21 +318,34 @@ async function seedIfEmpty() {
    *    全局数据由 `supabase/seed-discover.mjs` 用 service_role 灌一次，
    *    这里只在读到空的时候**在内存里**用种子兜底显示。
    */
-  {
+  const readSites = async () => {
     const st = await readTyped(storageKeys.sites, 'array')
     const action = decide(st)
-    if (action === 'use') {
-      state.sites = st.value
-    } else if (action === 'seed') {
-      state.sites = clone(seedSites)
-      if (!isCloudActive()) await persist(storageKeys.sites, state.sites)
-    } else {
-      // ⚠️ 发现页读不出来时**不能退回种子** —— 377 条全局数据不是用户数据，
-      //    拿种子顶上去会让用户以为「发现页就这些」。保持空 + 记一笔。
-      if (st.state === 'unreadable') state.readProblems.push({ key: storageKeys.sites, reason: st.reason })
-      state.sites = []
+    if (action === 'use') return st.value
+    if (action === 'seed') {
+      const fresh = clone(seedSites)
+      if (!isCloudActive()) await persist(storageKeys.sites, fresh)
+      return fresh
     }
+    // ⚠️ 发现页读不出来时**不能退回种子** —— 377 条全局数据不是用户数据，
+    //    拿种子顶上去会让用户以为「发现页就这些」。保持空 + 记一笔。
+    if (st.state === 'unreadable') state.readProblems.push({ key: storageKeys.sites, reason: st.reason })
+    return []
   }
+
+  /*
+   * 🔴 这三个读**并行**（理由同 `loadAll` 里那 7 个）：
+   *    云端模式下每个 `readTyped` 都是一次网络往返，串行就是 3 × ~250ms。
+   *    三者写的是**不同的键**，`readProblems` 的 push 顺序也无所谓 —— 并行安全。
+   */
+  const [categories, bookmarks, sites] = await Promise.all([
+    handle(storageKeys.categories, 'array', seedCategories),
+    handle(storageKeys.bookmarks, 'array', seedBookmarks),
+    readSites(),
+  ])
+  state.categories = categories
+  state.bookmarks = bookmarks
+  state.sites = sites
 }
 
 /**
@@ -460,19 +470,41 @@ async function loadAll() {
    *    用户看到的是一个空列表，没有任何解释。这些键**不会被种子覆盖**
    *    （危害小于上面两个），但同样该让用户知道，所以一起记进 `readProblems`。
    */
-  state.favorites = await readOr(storageKeys.favorites, [])
-  state.submissions = await readOr(storageKeys.submissions, [])
-  state.feedback = await readOr(storageKeys.feedback, [])
-  state.notes = await readOr(storageKeys.notes, [])
-  state.users = await readOr(storageKeys.users, [])
-  state.visits = await readOr(storageKeys.visits, {})
+  /*
+   * 🔴 这 7 个读**必须并行**。
+   *
+   * 原来是 7 个串行 `await` —— 云端模式下每个 `readOr` 都是一次网络往返，
+   * 实测每发 ~250ms（到 supabase 的 RTT），光这一段就 **~1.5 秒**，
+   * 而且**全部发生在 mount 之前** → 用户看到的是纯白屏。
+   *
+   * 它们彼此独立（读不同的键、没有先后依赖），`Promise.all` 之后
+   * 7 次往返压成 1 次。`state.readProblems` 的 push 顺序无所谓。
+   *
+   * 2026-10-02 实测：整页加载「#app 首次有内容」从 ~3.5s 降到 ~1.4s。
+   * 量法见 `/tmp/jerry-sb/boot-timing.mjs`。
+   */
+  const [favorites, submissions, feedback, notes, users, visits, share] = await Promise.all([
+    readOr(storageKeys.favorites, []),
+    readOr(storageKeys.submissions, []),
+    readOr(storageKeys.feedback, []),
+    readOr(storageKeys.notes, []),
+    readOr(storageKeys.users, []),
+    readOr(storageKeys.visits, {}),
+    readOr(storageKeys.share, null),
+  ])
+  state.favorites = favorites
+  state.submissions = submissions
+  state.feedback = feedback
+  state.notes = notes
+  state.users = users
+  state.visits = visits
+  if (share) state.share = { ...state.share, ...share }
 
+  // 这一条留在并行之外：它只在**本机模式**跑（云端模式下 session 归 Auth 管），
+  // 本机读 localStorage 不花网络，没必要为它增加复杂度。
   if (!isCloudActive()) {
     state.session = await readOr(storageKeys.session, null)
   }
-
-  const share = await readOr(storageKeys.share, null)
-  if (share) state.share = { ...state.share, ...share }
 
   // 预置一个管理员账号，方便直接体验后台。
   // 只在本地模式做 —— 云端模式下 profiles.id 是 uuid，

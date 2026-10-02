@@ -2251,6 +2251,102 @@ Error: Sensitive content approval timed out. The operation was not authorized an
 
 ---
 
+## 首屏加载：白屏 3.5s → 有内容 30ms（2026-10-02）
+
+### 先量：白屏到底花在哪
+
+`/tmp/jerry-sb/boot-timing.mjs`（`addInitScript` 装 MutationObserver + 监听 supabase 请求，
+**不改应用代码**）。已登录时整页加载，实测：
+
+```
+#app 首次有内容：3388 ms
+supabase 请求 15 发，几乎全是串行，每发 ~250ms（到 supabase 的 RTT）
+  最后一发结束于 +3363 ms
+```
+
+根因两条：
+
+1. **`loadAll()` 里 7 个串行 `await`**（favorites / submissions / feedback /
+   notes / users / visits / share）—— 7 × 250ms ≈ **1.5s**
+2. **`seedIfEmpty()` 里 3 个串行读**（categories / bookmarks / sites）—— 又 ~500ms
+3. `enterCloudMode()` 里 `reloadStore()` 与 `initSettings()` 也是串行 —— 再 ~250ms
+
+**而且这些全在 `mount()` 之前** → 用户看到的是**纯白屏**。
+
+### 改了三处
+
+| 位置 | 改动 |
+| --- | --- |
+| `useStore.loadAll()` | 7 个独立读 → `Promise.all`（写的是不同的键，`readProblems` 的 push 顺序无所谓） |
+| `useStore.seedIfEmpty()` | categories / bookmarks / sites 三个读 → `Promise.all` |
+| `useAuth.enterCloudMode()` | `reloadStore()` 与 `initSettings()` → `Promise.all`（两者互不依赖；`initSettings` 仍需在 `startRealtime` 之前，这条仍然满足） |
+| `index.html` | 加一段**首屏占位**（转圈），`mount()` 会整个替换掉它 |
+
+### 结果
+
+| | 之前 | 之后 |
+| --- | --- | --- |
+| 白屏（`#app` 有内容） | 3388–3637 ms | **24–40 ms** |
+| 真应用挂载 | ~3.4–3.6 s | **1.26–1.57 s** |
+| 请求批次 | 15 发串行 | **4 轮并行** |
+| 最后一发请求结束 | +3363 ms | +1122 ms |
+
+剩下的 4 轮是**语义上必须串行**的：`profiles`（initAuth）→ 迁移读云端 →
+`seedIfEmpty` → `loadAll`。迁移必须先于 `seedIfEmpty`（它可能写数据），
+`loadAll` 也必须在迁移之后（要读到写后的状态）—— 所以**不能再合**。
+
+> ⚠️ `categories` / `bookmarks` 在时间线里出现两次（迁移读一次、`loadAll` 读一次）。
+> 这是**必需的**，不是重复：迁移可能改了云端，`loadAll` 必须读到改后的状态。
+
+### 首屏占位为什么写在 `index.html` 而不是组件里
+
+`bootstrap()` 是「settings → auth → store → **才 mount**」，
+那几秒**组件还没挂载** —— 组件里做骨架屏救不了这一段。
+只有写在 `index.html` 里，才能从「HTML 到位」就开始显示。
+
+配套细节：
+- 样式必须是**行内 / `<head>` 里的小段 CSS**：打包的 CSS 这会儿可能还没下载完；
+- 默认 `themeMode` 是 `system`，所以用 `prefers-color-scheme` 跟着系统走；
+- 尊重 `prefers-reduced-motion`（转慢一点，但**不停** —— 静止的环看着像卡住了）。
+
+### 怎么验的
+
+`boot-timing.mjs` 已经从「量时间的脚本」升级成**带断言的探针**
+（不然以后有人改回串行也没人发现）：
+
+| 断言 | 阈值 | 说明 |
+| --- | --- | --- |
+| 占位出现 | ≤ 400 ms | 不再白屏 |
+| 真应用挂载 | ≤ 2500 ms | |
+| **请求轮数** | ≤ 5 | **主判据**：结构性的，不受网络抖动影响 |
+| 最后一发请求 | ≤ 1800 ms | |
+| 挂载后占位消失 | — | `#app` 里没有 `.boot-splash` |
+
+跑 3 轮：dev **15 / 0**、dist **15 / 0**。
+**造红**（把 `loadAll` 的 7 个读改回串行）：轮数 4 → **10**、
+最后一发 1218 → **2626 ms**、挂载 1264 → **2675 ms**，三条断言如期报红。
+
+**回归**（改的是数据加载主路径，必须跑）：
+`transfer-cloud` **35/0** · `reset-default` **45/0** · `multi-tab` **19/0** ·
+`route-guard` **32/0/1** · `feedback-flow` **29/0** ·
+`i18n-parity` **15/0** · `i18n-text-guard` **6/0** · `i18n-render` **14/0**。
+
+### ⚠️ 踩到的坑：探针改了**共享测试账号**的状态没还原
+
+跑回归时 `transfer-cloud.mjs` 的 S3 报「上传按钮不可见」，我一度以为是自己改坏了
+`loadAll`（因为我把 `state.session = profile` 挪到了 `Promise.all` 之后）。
+**stash 掉全部改动再跑一遍 —— 同样的红**，才确认不是回归。
+
+真因：`i18n-en-check.mjs` 在**登录状态下点了语言开关**，而语言在登录后存的是
+**云端** `user_settings` —— 把共享测试账号的语言永久改成英文了。
+于是那个探针找「数据备份」按钮当然找不到。
+
+修法：给 `i18n-en-check.mjs` 加了**收尾还原**（跑完把语言切回中文）。
+教训是「**探针动了共享状态就要还原**」，而且这类污染的**症状指向别的探针**，
+根因却在更早的那次运行里 —— 排查时**先 stash 改动做对照**比读代码快得多。
+
+---
+
 ## 待办
 
 - [x] **硬编码文案 + 补第三道 i18n 守卫**（2026-10-02）
@@ -2281,16 +2377,11 @@ Error: Sensitive content approval timed out. The operation was not authorized an
       （本地模式没有任何人会是 admin，拦了会把站长自己锁在外面）。
       探针 dev **36/0/0**、dist **29/0/1 跳过**；造红两次（守卫放行 → 10 红、
       `safeRedirect` 返原值 → 3 红）。详见「路由守卫」一节。
-- [ ] **🔴 已登录时整页加载要 6~8 秒才挂载，期间是白屏**（2026-10-02 发现，**既有问题**）
-      现象：登录状态下刷新任意页面，`#app` 在 6~8 秒内一直是空的。
-      `main.js` 的 `bootstrap()` 是串行 await
-      （`initSettings` → `initAuth`[getSession + 读 profiles + 迁移] →
-      `initStore`[一次全量读，实测十几发请求] → 才 mount），
-      网络一抖就拖长。**探针等 6s 得到 `bodyLen=0`、等 7s 得到 1906 ——
-      差 1 秒就能把「守卫把页面弄白了」这个结论带反**（这次真踩了）。
-      未登录时不走这条路（`initAuth` 提前 return），所以只影响已登录用户。
-      方向：给 `bootstrap()` 加个「最多等 N 秒就先把壳挂上」的超时，
-      或者先 mount、再在后台把数据补上（骨架屏）。
+- [x] **已登录时整页加载白屏 3.5 秒**（2026-10-02 发现 + 当天修掉）
+      `loadAll` 7 个串行读 + `seedIfEmpty` 3 个 + `enterCloudMode` 2 个，
+      全在 `mount()` 之前 → 纯白屏。改成并行 + `index.html` 加首屏占位：
+      **白屏 3.5s → 30ms，真应用挂载 3.5s → 1.3s**。
+      详见「首屏加载：白屏 3.5s → 有内容 30ms」一节。
 - [x] 接 Supabase：账号体系、跨设备同步、分享页、网站审核真正落库
 - [x] 实时多端同步（`supabase.channel()` 订阅表变更）
 - [x] 发现页的 `collects` 收藏数接真实数据（`favorites` 触发器维护，见「收藏数是怎么算的」）

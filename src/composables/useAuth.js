@@ -225,11 +225,25 @@ async function enterCloudMode(profile) {
   useCloudStorage()
   state.session = profile
   await migrateLocalToCloud()
-  await reloadStore()
+  /**
+   * 🔴 `reloadStore()` 和 `initSettings()` **并行**。
+   *
+   * 原来是串行：先把十几张表读完，再去读 `user_settings` ——
+   * 两件事**彼此不依赖**（一个读业务数据、一个读设置），
+   * 串行白等一次往返（实测 ~250ms），而且这些**全在 mount 之前**。
+   *
+   * ⚠️ 顺序约束只有一条：`initSettings()` 必须在 `startRealtime()` **之前**
+   *    （订阅一建立就可能收到 user_settings 变更，得先把快照准备好）——
+   *    两者都在下面这个 `Promise.all` 里等完，这条仍然满足。
+   *
+   * ⚠️ 也必须**在 `migrateLocalToCloud()` 之后**：迁移要用本地那份设置
+   *    决定灌什么，先读云端会把本地那份盖掉。
+   */
+  await Promise.all([reloadStore(), initSettings()])
   // reloadStore 在云端模式不碰 session（那是 Auth 的事），保险起见再钉一次
   state.session = profile
   /**
-   * ⚠️ 必须**重新读一次设置**。
+   * 下面这段是 `initSettings()` 为什么要在这里再跑一次的理由（保留原文）。
    *
    * `initSettings()` 在应用启动时只跑过一次，而那一刻还是**本地模式** ——
    * 它读的是 localStorage 里的 `jt:settings`，碰不到云端的 `user_settings`。
@@ -241,7 +255,6 @@ async function enterCloudMode(profile) {
    * 放在 `startRealtime` **之前**：订阅一建立就可能收到 user_settings 的变更，
    * 得先把快照准备好。`initSettings` 只读不写（不 persist），不会触发回环。
    */
-  await initSettings()
   /**
    * 实时同步**放在最后**：订阅一旦建立就会往 state 里写东西，
    * 得等数据先读完、快照建好，否则第一批事件会撞上「快照缺失」触发重读。

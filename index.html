@@ -37,8 +37,61 @@
     />
 
     <script type="module" src="/src/main.js"></script>
+
+    <!--
+      首屏加载占位（2026-10-02）。
+
+      为什么放在 index.html 而不是组件里：
+        `main.js` 的 `bootstrap()` 是「settings → auth → store → 才 mount」，
+        已登录时那条链要打十几发网络（实测白屏 3.5s，网络差时更久）。
+        组件里做骨架屏**救不了这段** —— 那会儿组件还没挂载。
+        只有写在这里，才能从「HTML 到位」就开始显示。
+
+      ⚠️ Vue 的 `mount()` 会**整个替换掉 `#app` 的内容**，所以这段
+         「自己会消失」，不需要任何 JS 去清它。
+
+      ⚠️ 必须是**行内 / head 里的小段 CSS**：打包出来的 CSS 文件这会儿
+         可能还没下载完，用 class 去外部文件里取样式就白搭。
+
+      ⚠️ 默认 `themeMode` 是 `system`，所以这里用 `prefers-color-scheme`
+         跟着系统走 —— 和 `initSettings()` 的判断口径一致。
+         颜色取的是 `--main_bg_color`（Light）与 `theme-color` meta（Dark）。
+    -->
+    <style>
+      .boot-splash {
+        align-items: center;
+        background: #eef1f6;
+        display: flex;
+        inset: 0;
+        justify-content: center;
+        position: fixed;
+        z-index: 1;
+      }
+      @media (prefers-color-scheme: dark) {
+        .boot-splash { background: #0f172a; }
+      }
+      .boot-ring {
+        animation: boot-spin 0.9s linear infinite;
+        border: 2.5px solid rgba(42, 157, 143, 0.22);
+        border-radius: 50%;
+        border-top-color: #2a9d8f; /* 默认主题色 teal */
+        height: 30px;
+        width: 30px;
+      }
+      @keyframes boot-spin {
+        to { transform: rotate(360deg); }
+      }
+      /* 尊重「减少动态效果」：别转那么快，但别停 —— 静止的环看着像卡住了 */
+      @media (prefers-reduced-motion: reduce) {
+        .boot-ring { animation-duration: 2.4s; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="boot-splash" role="status" aria-live="polite" aria-label="Loading">
+        <div class="boot-ring"></div>
+      </div>
+    </div>
   </body>
 </html>
