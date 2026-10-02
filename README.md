@@ -1353,29 +1353,40 @@ const all = supabaseConfigured
    第一次跑碰巧命中同一个实例，之后就全是空数组。
    改成**走界面点击**，用的是 app 自己那份实例。
 
-#### ⚠️ 还有两处同类隐患（**这次没改，先记着**）
+#### ⚠️ `submissions` / `feedback` 两张表：不是隐患，是**没接**
 
-同一张策略表里，**能看见但写不了**的组合还有两组。它们现在不可达，
-但接上写路径的那天会立刻复现同一个 bug：
+写上面那节时我顺手记了「这两张表也有『能看见但写不了』的组合，将来接上会复现」。
+**动态验了一遍（`feedback-path-audit.mjs`，7 / 0）之后发现说重了**，实际是这样：
 
-| 表 | 策略 | 谁能看见但写不了 |
-| --- | --- | --- |
-| `submissions` | `update using (admin or (own and status='pending'))` | 用户自己**已通过**的那条提交 |
-| `feedback` | `update using (admin)` | 用户自己提的反馈 |
+| 表 | 真实状态 |
+| --- | --- |
+| `submissions` | **弃用表**。用户提交站点走的是 `DiscoverView.doSubmit()` → `createSite(..., 'pending')` → 写 **`discover_sites`**（策略放行 `submitted_by = auth.uid() and status = 'pending'`），跟这张表**没有任何关系** |
+| `feedback` | **整条链路没实现**。全仓没有任何地方能**创建**一条反馈 |
 
-- 这两张表的写路径（`persistSubmissions` / `persistFeedback`）
-  **导出了但全仓没有任何调用点**，所以暂时不会触发。
-- ⚠️ 但**通用 `writeCloud` 那条路（`upsert` + `delete`）没有 0 行检查**，
-  只给 `writeSites` 加了。之所以没顺手加：私有表
-  （`categories` / `bookmarks` / `notes` / `visits` / `favorites` /
-  `user_settings` / `share_settings`）的策略是 `user_id = auth.uid()`，
-  **不存在「看得见写不了」**，硬加检查反而会引入假失败
-  （比如另一台设备刚删掉那行 → 影响 0 行 → 误报失败）。
-  所以将来接 `submissions` / `feedback` 时，要么给这两张表单独开检查，
-  要么把它们也挪出通用路径 —— **别直接复用**。
-- 另外 `AdminView.sendReply()` 现在**只改内存、完全不落盘**（`item.replies.push(...)`
-  之后没有任何 `persist`），刷新一次回复就没了。这条是「压根没写」，
-  和上面那个「写了但被静默挡掉」不是一回事，但同一个下午发现的，一起记在这儿。
+`feedback` 那半边的证据（都实测过，不是读代码推的）：
+
+- 云端 `feedback` / `submissions` 两张表当前账号可见 **0 行**（`content-range` 总数 0）。
+- `/admin` 的「反馈」tab 点进去**永远是空列表**（`.fb-card` = 0，只有空态），
+  而且这个 tab 里**一个按钮都没有**（没有「新建 / 提交」入口）。
+- 用户侧四个页面（首页 / 发现 / 图标管理 / 设置面板）**都不出现「反馈」二字**。
+- 于是 `AdminView.sendReply()` **根本触发不了** ——
+  没有反馈条目就没有「回复」按钮。它是**死代码**，不是「能用但没落盘」。
+
+⚠️ 所以这里有个更容易误导人的东西：**`/admin` 的「反馈」tab 是一个永远空的面板。**
+管理员点进去看到「暂无反馈」，会读成「**没人反馈**」，而真相是「**这个功能没做**」。
+两种含义在界面上长得一模一样 —— 和「写失败却报成功」是同一族问题的**镜像**：
+**「没有数据」和「没有功能」在界面上长得一样。**
+
+真要接的时候，注意两件事：
+
+1. `feedback` 表的形状是 **`reply`（单条 text）+ `status`（open/replied/closed）+
+   `replied_at`** —— 而 `AdminView` 现在读写的是 **`f.replies[]`（数组）**，
+   这个字段**库里根本没有**，也不在 `SPECS[feedback].columns` 里，
+   就算调了 `persistFeedback()` 也会被 `localToRows` 丢掉。**是形状不匹配，不是漏了一行。**
+2. 接上之后就会撞上前面那节说的「静默 0 行」—— `feedback_update using (is_admin())`。
+   通用 `writeCloud`（`upsert` + `delete`）**没有** 0 行检查，所以要么给这张表
+   单独开检查，要么把它挪出通用路径，**别直接复用**。
+   （没顺手给通用路径加的理由见上一节：私有表不存在这种情况，硬加会引入假失败。）
 
 ---
 
