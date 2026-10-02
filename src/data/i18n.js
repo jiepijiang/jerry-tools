@@ -371,6 +371,98 @@ export const messages = {
     // 路由守卫拦下非管理员时的提示（见 src/router/index.js）
     'route.noPermission': '没有权限访问这个页面',
 
+    // ==================================================================
+    // 下面这一组是 2026-10-02 从**硬编码中文**搬进来的。
+    //
+    // 两道 i18n 守卫当时**都漏了**它们：
+    //   · i18n-parity 只扫 `t('…')` 的字面量 —— 压根没调 t() 的它看不见；
+    //   · i18n-render 只扫**正常渲染**出来的页面 —— 错误分支 / 冷门分支扫不到。
+    // 补的第三道守卫：`scan-hardcoded-text.mjs`（静态扫引号里的中文）。
+    // ==================================================================
+
+    // ---- 日期 / 星期（顶栏）----
+    // 用「格式串 + 星期名」而不是在代码里拼：中英语序不同，
+    // 硬拼的话英文界面会变成「Fri 10月2日」。
+    'date.format': '{m}月{d}日 {w}',
+    'date.wd.0': '周日',
+    'date.wd.1': '周一',
+    'date.wd.2': '周二',
+    'date.wd.3': '周三',
+    'date.wd.4': '周四',
+    'date.wd.5': '周五',
+    'date.wd.6': '周六',
+
+    // ---- 天气描述（WMO 天气代码 → 文字）----
+    // ⚠️ key 的后缀就是 WMO 代码本身。`useClock.js` 的 `WMO_CODES`
+    //    要和这里一一对应 —— 少一个 key，界面就会显示 `weather.wmo.65` 这种字面量。
+    'weather.wmo.0': '晴',
+    'weather.wmo.1': '大部晴朗',
+    'weather.wmo.2': '多云',
+    'weather.wmo.3': '阴',
+    'weather.wmo.45': '雾',
+    'weather.wmo.48': '雾凇',
+    'weather.wmo.51': '小毛毛雨',
+    'weather.wmo.53': '毛毛雨',
+    'weather.wmo.55': '密集毛毛雨',
+    'weather.wmo.56': '冻毛毛雨',
+    'weather.wmo.57': '密集冻毛毛雨',
+    'weather.wmo.61': '小雨',
+    'weather.wmo.63': '中雨',
+    'weather.wmo.65': '大雨',
+    'weather.wmo.66': '小冻雨',
+    'weather.wmo.67': '大冻雨',
+    'weather.wmo.71': '小雪',
+    'weather.wmo.73': '中雪',
+    'weather.wmo.75': '大雪',
+    'weather.wmo.77': '雪粒',
+    'weather.wmo.80': '小阵雨',
+    'weather.wmo.81': '阵雨',
+    'weather.wmo.82': '强阵雨',
+    'weather.wmo.85': '小阵雪',
+    'weather.wmo.86': '大阵雪',
+    'weather.wmo.95': '雷暴',
+    'weather.wmo.96': '雷暴伴冰雹',
+    'weather.wmo.99': '强雷暴伴冰雹',
+    'weather.wmo.unknown': '未知',
+
+    // ---- 登录 / 注册的错误 ----
+    // ⚠️ 这几条**只在输错的时候**才出现，所以 i18n-render 扫页面永远碰不到 ——
+    //    它们就是这么漏成硬编码中文的。
+    'auth.errInvalidEmail': '邮箱格式不正确',
+    'auth.errWeakPassword': '密码至少 6 位',
+    'auth.errEmailTaken': '该邮箱已注册',
+    'auth.errBadCredentials': '邮箱或密码不正确',
+    'auth.errDisabled': '账号已被禁用',
+    'auth.errGeneric': '操作失败',
+
+    // ---- 后台的用户备注 ----
+    'admin.note': '备注',
+    'admin.noteEdit': '编辑备注',
+    'admin.notePlaceholder': '输入备注信息...',
+
+    // ---- 主题色 / 渐变的**名字**（色块上的 tooltip）----
+    // （`iconSchemes` 的名字本来就是英文，没搬 —— 见 README 的说明。）
+    'theme.color.teal': '青碧',
+    'theme.color.blue': '靛蓝',
+    'theme.color.rose': '玫红',
+    'theme.color.amber': '琥珀',
+    'theme.color.violet': '紫罗兰',
+    'theme.color.emerald': '翡翠',
+    'theme.color.slate': '石墨',
+    'theme.color.coral': '珊瑚',
+    'theme.color.pink': '樱粉',
+    'theme.color.cyan': '天青',
+    'theme.gradient.vivid': '明快',
+    'theme.gradient.ocean': '海洋',
+    'theme.gradient.sunset': '日落',
+    'theme.gradient.candy': '糖果',
+    'theme.gradient.lavender': '薰衣草',
+    'theme.gradient.rainbow': '彩虹',
+
+    // ---- 零散 ----
+    'common.opensNewWindow': '（新窗口打开）',
+    'bookmark.dragSort': '拖拽排序',
+
     'toast.saved': '已保存',
     'toast.saveFail': '保存失败',
     // 上传图片失败。和「保存失败」分开，是因为这两件事的下一步动作不一样：
@@ -779,6 +871,96 @@ export const messages = {
 
     // Shown when the route guard bounces a non-admin (see src/router/index.js)
     'route.noPermission': 'You do not have access to this page',
+
+    // ==================================================================
+    // Everything below was hard-coded Chinese until 2026-10-02.
+    // Both i18n guards missed it: `i18n-parity` only scans `t('…')`
+    // literals, and `i18n-render` only scans what a normal page render
+    // shows — copy that only appears on an error path is invisible to both.
+    // Third guard: `scan-hardcoded-text.mjs`.
+    // ==================================================================
+
+    // ---- Date / weekday (top bar) ----
+    // A format string instead of string concatenation: word order differs
+    // between languages, and naive concatenation gives "Fri 10月2日".
+    'date.format': '{w} {m}/{d}',
+    'date.wd.0': 'Sun',
+    'date.wd.1': 'Mon',
+    'date.wd.2': 'Tue',
+    'date.wd.3': 'Wed',
+    'date.wd.4': 'Thu',
+    'date.wd.5': 'Fri',
+    'date.wd.6': 'Sat',
+
+    // ---- Weather (WMO code → text) ----
+    // ⚠️ The key suffix **is** the WMO code. Keep this in sync with
+    //    `WMO_CODES` in `useClock.js` — a missing key renders `weather.wmo.65`.
+    'weather.wmo.0': 'Clear',
+    'weather.wmo.1': 'Mainly clear',
+    'weather.wmo.2': 'Partly cloudy',
+    'weather.wmo.3': 'Overcast',
+    'weather.wmo.45': 'Fog',
+    'weather.wmo.48': 'Rime fog',
+    'weather.wmo.51': 'Light drizzle',
+    'weather.wmo.53': 'Drizzle',
+    'weather.wmo.55': 'Dense drizzle',
+    'weather.wmo.56': 'Light freezing drizzle',
+    'weather.wmo.57': 'Dense freezing drizzle',
+    'weather.wmo.61': 'Light rain',
+    'weather.wmo.63': 'Rain',
+    'weather.wmo.65': 'Heavy rain',
+    'weather.wmo.66': 'Light freezing rain',
+    'weather.wmo.67': 'Heavy freezing rain',
+    'weather.wmo.71': 'Light snow',
+    'weather.wmo.73': 'Snow',
+    'weather.wmo.75': 'Heavy snow',
+    'weather.wmo.77': 'Snow grains',
+    'weather.wmo.80': 'Light showers',
+    'weather.wmo.81': 'Showers',
+    'weather.wmo.82': 'Violent showers',
+    'weather.wmo.85': 'Light snow showers',
+    'weather.wmo.86': 'Snow showers',
+    'weather.wmo.95': 'Thunderstorm',
+    'weather.wmo.96': 'Thunderstorm with hail',
+    'weather.wmo.99': 'Severe thunderstorm with hail',
+    'weather.wmo.unknown': 'Unknown',
+
+    // ---- Sign-in / sign-up errors ----
+    // ⚠️ These only appear **when something goes wrong**, so `i18n-render`
+    //    never sees them — which is exactly how they stayed hard-coded.
+    'auth.errInvalidEmail': 'Invalid email address',
+    'auth.errWeakPassword': 'Password must be at least 6 characters',
+    'auth.errEmailTaken': 'That email is already registered',
+    'auth.errBadCredentials': 'Incorrect email or password',
+    'auth.errDisabled': 'This account is disabled',
+    'auth.errGeneric': 'Something went wrong',
+
+    // ---- Admin: user note ----
+    'admin.note': 'Note',
+    'admin.noteEdit': 'Edit note',
+    'admin.notePlaceholder': 'Enter a note…',
+
+    // ---- Accent colour / gradient **names** (swatch tooltips) ----
+    'theme.color.teal': 'Teal',
+    'theme.color.blue': 'Indigo',
+    'theme.color.rose': 'Rose',
+    'theme.color.amber': 'Amber',
+    'theme.color.violet': 'Violet',
+    'theme.color.emerald': 'Emerald',
+    'theme.color.slate': 'Slate',
+    'theme.color.coral': 'Coral',
+    'theme.color.pink': 'Pink',
+    'theme.color.cyan': 'Cyan',
+    'theme.gradient.vivid': 'Vivid',
+    'theme.gradient.ocean': 'Ocean',
+    'theme.gradient.sunset': 'Sunset',
+    'theme.gradient.candy': 'Candy',
+    'theme.gradient.lavender': 'Lavender',
+    'theme.gradient.rainbow': 'Rainbow',
+
+    // ---- Odds and ends ----
+    'common.opensNewWindow': ' (opens in a new window)',
+    'bookmark.dragSort': 'Drag to reorder',
 
     'toast.saved': 'Saved',
     'toast.saveFail': 'Save failed',

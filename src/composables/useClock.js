@@ -24,6 +24,7 @@
 import { computed, onUnmounted, reactive, ref } from 'vue'
 import { lunarFullString, lunarLabel } from '@/utils/lunar'
 import { pickCityName, pickNominatimCity } from '@/utils/geo'
+import { translate } from '@/composables/useI18n'
 import { setSettings, settings } from '@/composables/useSettings'
 import { defaultSettings } from '@/data/options'
 
@@ -47,16 +48,29 @@ export function stopClock() {
   timer = null
 }
 
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-
 export const timeText = computed(() => {
   const d = now.value
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 })
 
+/**
+ * 日期文案。
+ *
+ * ⚠️ 走**格式串**（`date.format`）而不是在代码里拼 —— 中英语序不同：
+ *    中文 `{m}月{d}日 {w}` → 「10月2日 周五」
+ *    英文 `{w} {m}/{d}`    → 「Fri 10/2」
+ *    硬拼的话英文界面会变成「Fri 10月2日」。
+ *
+ * 这是个 `computed`，`translate()` 里读了 `settings.language`，
+ * 所以**切语言会自己重算**（不用手动刷新）。
+ */
 export const dateText = computed(() => {
   const d = now.value
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`
+  return translate('date.format', {
+    m: d.getMonth() + 1,
+    d: d.getDate(),
+    w: translate(`date.wd.${d.getDay()}`),
+  })
 })
 
 export const lunarText = computed(() => lunarFullString(now.value))
@@ -66,37 +80,22 @@ export const todayBadge = computed(() => lunarLabel(now.value))
 
 /* ------------------------------------------------------------------ 天气 */
 
-/** WMO 天气代码 → 中文描述。 */
-const WMO = {
-  0: '晴',
-  1: '大部晴朗',
-  2: '多云',
-  3: '阴',
-  45: '雾',
-  48: '雾凇',
-  51: '小毛毛雨',
-  53: '毛毛雨',
-  55: '密集毛毛雨',
-  56: '冻毛毛雨',
-  57: '密集冻毛毛雨',
-  61: '小雨',
-  63: '中雨',
-  65: '大雨',
-  66: '小冻雨',
-  67: '大冻雨',
-  71: '小雪',
-  73: '中雪',
-  75: '大雪',
-  77: '雪粒',
-  80: '小阵雨',
-  81: '阵雨',
-  82: '强阵雨',
-  85: '小阵雪',
-  86: '大阵雪',
-  95: '雷暴',
-  96: '雷暴伴冰雹',
-  99: '强雷暴伴冰雹',
-}
+/**
+ * WMO 天气代码的**封闭集合**。
+ *
+ * ⚠️ 必须和 `i18n.js` 里的 `weather.wmo.*` 一一对应 —— 少一个 key，
+ *    界面就会显示 `weather.wmo.65` 这种字面量。
+ *    2026-10-02 之前这里直接存中文，英文界面下顶栏会显示「大部晴朗」。
+ */
+const WMO_CODES = new Set([
+  0, 1, 2, 3, 45, 48, 51, 53, 55, 56, 57,
+  61, 63, 65, 66, 67, 71, 73, 75, 77,
+  80, 81, 82, 85, 86, 95, 96, 99,
+])
+
+/** 天气代码 → 当前语言的描述。 */
+const wmoText = (code) =>
+  translate(WMO_CODES.has(code) ? `weather.wmo.${code}` : 'weather.wmo.unknown')
 
 /** 天气代码 → 动效分组（给 WeatherIcon 用）。 */
 export function weatherGroup(code) {
@@ -122,7 +121,6 @@ export const weather = reactive({
   failed: false,
   temp: null,
   code: 0,
-  text: '',
   group: 'sun',
   city: '',
   high: null,
@@ -137,6 +135,22 @@ export const weather = reactive({
    *   'default'  —— 谁都没给，落到了内置默认城市（不代表用户所在地，UI 要标出来）
    */
   source: '',
+})
+
+/**
+ * 天气描述文案（跟着语言走）。
+ *
+ * ⚠️ 必须是 `computed` —— 以前是在 `apply()` 里把中文字符串写进 `weather.text`，
+ *    那样**切语言不会更新**，用户得刷新页面才看到英文。
+ *    这里没做成 `weather` 上的字段，是因为 `reactive()` 里塞 computed 不会自动解包。
+ *
+ * ⚠️ `failed` 这一支不能漏：以前是 `failWeather()` 往 `weather.text` 里塞
+ *    「无法获取天气」。把 `text` 字段删掉之后如果这里不接住，
+ *    失败状态会一直显示「获取天气中」—— **看起来像还在加载，其实是失败了**。
+ */
+export const weatherText = computed(() => {
+  if (weather.failed) return translate('weather.fail')
+  return weather.updatedAt ? wmoText(weather.code) : ''
 })
 
 /**
@@ -276,7 +290,6 @@ function writeCache(city, data) {
 function apply(data, source) {
   weather.temp = Math.round(data.temp)
   weather.code = data.code
-  weather.text = WMO[data.code] || '未知'
   weather.group = weatherGroup(data.code)
   weather.high = Math.round(data.high)
   weather.low = Math.round(data.low)
@@ -311,7 +324,8 @@ const FORECAST_QUERY =
 function failWeather(e) {
   console.warn('[weather] 获取失败：', e)
   weather.failed = true
-  weather.text = '无法获取天气'
+  // 文案由 `weatherText` 那个 computed 出（读 `weather.failed`），
+  // 这里**不要**再往 weather 上写字符串 —— 那样切语言不会更新。
   return false
 }
 

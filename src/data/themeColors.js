@@ -8,16 +8,16 @@
 
 /** 10 套主题色。hsl 是浅色下的分量，hslDark 是深色下的。 */
 export const accentColors = [
-  { id: 'teal', name: '青碧', hex: '#2a9d8f', hue: '174 60% 42%', hueDark: '174 60% 48%' },
-  { id: 'blue', name: '靛蓝', hex: '#3b82f6', hue: '221 83% 53%', hueDark: '221 83% 58%' },
-  { id: 'rose', name: '玫红', hex: '#e63462', hue: '346 77% 50%', hueDark: '346 77% 55%' },
-  { id: 'amber', name: '琥珀', hex: '#f59e0b', hue: '38 92% 50%', hueDark: '38 92% 55%' },
-  { id: 'violet', name: '紫罗兰', hex: '#8b5cf6', hue: '262 83% 58%', hueDark: '262 83% 63%' },
-  { id: 'emerald', name: '翡翠', hex: '#10b981', hue: '160 84% 39%', hueDark: '160 84% 44%' },
-  { id: 'slate', name: '石墨', hex: '#64748b', hue: '215 16% 47%', hueDark: '215 16% 55%' },
-  { id: 'coral', name: '珊瑚', hex: '#f97316', hue: '25 95% 53%', hueDark: '25 95% 58%' },
-  { id: 'pink', name: '樱粉', hex: '#ec4899', hue: '330 81% 60%', hueDark: '330 81% 65%' },
-  { id: 'cyan', name: '天青', hex: '#06b6d4', hue: '189 94% 43%', hueDark: '189 94% 48%' },
+  { id: 'teal', nameKey: 'theme.color.teal', hex: '#2a9d8f', hue: '174 60% 42%', hueDark: '174 60% 48%' },
+  { id: 'blue', nameKey: 'theme.color.blue', hex: '#3b82f6', hue: '221 83% 53%', hueDark: '221 83% 58%' },
+  { id: 'rose', nameKey: 'theme.color.rose', hex: '#e63462', hue: '346 77% 50%', hueDark: '346 77% 55%' },
+  { id: 'amber', nameKey: 'theme.color.amber', hex: '#f59e0b', hue: '38 92% 50%', hueDark: '38 92% 55%' },
+  { id: 'violet', nameKey: 'theme.color.violet', hex: '#8b5cf6', hue: '262 83% 58%', hueDark: '262 83% 63%' },
+  { id: 'emerald', nameKey: 'theme.color.emerald', hex: '#10b981', hue: '160 84% 39%', hueDark: '160 84% 44%' },
+  { id: 'slate', nameKey: 'theme.color.slate', hex: '#64748b', hue: '215 16% 47%', hueDark: '215 16% 55%' },
+  { id: 'coral', nameKey: 'theme.color.coral', hex: '#f97316', hue: '25 95% 53%', hueDark: '25 95% 58%' },
+  { id: 'pink', nameKey: 'theme.color.pink', hex: '#ec4899', hue: '330 81% 60%', hueDark: '330 81% 65%' },
+  { id: 'cyan', nameKey: 'theme.color.cyan', hex: '#06b6d4', hue: '189 94% 43%', hueDark: '189 94% 48%' },
 ]
 
 /**
@@ -47,7 +47,7 @@ export const iconSchemes = [
 export const gradientPresets = [
   {
     id: 'vivid',
-    name: '明快',
+    nameKey: 'theme.gradient.vivid',
     colors: [
       ['#56b6a5', '#3d9e8b'],
       ['#7b9fce', '#6889b8'],
@@ -58,7 +58,7 @@ export const gradientPresets = [
   },
   {
     id: 'ocean',
-    name: '海洋',
+    nameKey: 'theme.gradient.ocean',
     colors: [
       ['#4a90d9', '#3672b5'],
       ['#5bb8c4', '#449da8'],
@@ -69,7 +69,7 @@ export const gradientPresets = [
   },
   {
     id: 'sunset',
-    name: '日落',
+    nameKey: 'theme.gradient.sunset',
     colors: [
       ['#e8836a', '#d46e56'],
       ['#f0a868', '#dba05e'],
@@ -80,7 +80,7 @@ export const gradientPresets = [
   },
   {
     id: 'candy',
-    name: '糖果',
+    nameKey: 'theme.gradient.candy',
     colors: [
       ['#f472b6', '#e44d95'],
       ['#fb923c', '#e87d2a'],
@@ -91,7 +91,7 @@ export const gradientPresets = [
   },
   {
     id: 'lavender',
-    name: '薰衣草',
+    nameKey: 'theme.gradient.lavender',
     colors: [
       ['#9b8ec4', '#8678ae'],
       ['#b08db8', '#9a78a2'],
@@ -102,7 +102,7 @@ export const gradientPresets = [
   },
   {
     id: 'rainbow',
-    name: '彩虹',
+    nameKey: 'theme.gradient.rainbow',
     colors: [
       ['#f56565', '#e53e3e'],
       ['#ed8936', '#dd6b20'],

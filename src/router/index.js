@@ -18,19 +18,17 @@ const routes = [
     path: '/',
     name: 'home',
     component: () => import('@/views/HomeView.vue'),
-    meta: { title: '首页' },
   },
   {
     path: '/discover',
     name: 'discover',
     component: () => import('@/views/DiscoverView.vue'),
-    meta: { title: '发现' },
   },
   {
     path: '/admin',
     name: 'admin',
     component: () => import('@/views/AdminView.vue'),
-    meta: { title: '管理后台', requiresAdmin: true },
+    meta: { requiresAdmin: true },
   },
   {
     /* 参考站把它做成独立路由而不是后台的一个 tab，保持一致 */
@@ -41,19 +39,17 @@ const routes = [
     // 2026-10-02 之前它连口令闸都没有，任何登录用户点进去都会看到「图标已更新」而库里没变
     // —— 那个 bug 的根因已经修了（见 adapters/cloud.js 的 writeSites），
     // 这里补上「干脆别让人进去」这一半。
-    meta: { title: '图标管理', requiresAdmin: true },
+    meta: { requiresAdmin: true },
   },
   {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),
-    meta: { title: '登录' },
   },
   {
     path: '/s/:slug',
     name: 'share',
     component: () => import('@/views/ShareView.vue'),
-    meta: { title: '分享' },
   },
   {
     path: '/:pathMatch(.*)*',

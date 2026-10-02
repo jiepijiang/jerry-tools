@@ -19,7 +19,10 @@ import { computed, ref } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import BookmarkIcon from '@/components/BookmarkIcon.vue'
 import { settings } from '@/composables/useSettings'
+import { useI18n } from '@/composables/useI18n'
 import { faviconOf } from '@/utils/helpers'
+
+const { t } = useI18n()
 
 const props = defineProps({
   bookmark: { type: Object, required: true },
@@ -225,7 +228,7 @@ function onRelease() {
     @dragover="onDragOver"
     @drop="onDrop"
   >
-    <div v-if="draggable" class="bm-grip" title="拖拽排序" @mousedown.stop @click.stop>
+    <div v-if="draggable" class="bm-grip" :title="t('bookmark.dragSort')" @mousedown.stop @click.stop>
       <AppIcon name="GripVertical" :size="15" />
     </div>
 

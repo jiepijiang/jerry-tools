@@ -29,7 +29,7 @@ const emit = defineEmits(['openSettings', 'openSearch', 'logout'])
 
 const router = useRouter()
 const { t } = useI18n()
-const { timeText, dateText, lunarText, todayBadge, weather, geo } = useClock()
+const { timeText, dateText, lunarText, todayBadge, weather, weatherText, geo } = useClock()
 
 const accentOpen = ref(false)
 const userOpen = ref(false)
@@ -150,7 +150,7 @@ function go(name) {
         :href="item.href || undefined"
         :target="item.href ? '_blank' : undefined"
         :rel="item.href ? 'noopener noreferrer' : undefined"
-        :title="item.href ? item.label + '（新窗口打开）' : undefined"
+        :title="item.href ? item.label + t('common.opensNewWindow') : undefined"
         @click="item.href ? (mobileMenu = false) : go(item.name)"
       >
         <AppIcon :name="item.icon" :size="15" />
@@ -193,7 +193,7 @@ function go(name) {
       <WeatherIcon :group="weather.group" :size="30" />
       <div class="card-text">
         <strong>{{ weather.temp != null ? weather.temp + '°' : '--' }}</strong>
-        <span>{{ weather.text || (geo.locating ? t('weather.locating') : t('weather.loading')) }}</span>
+        <span>{{ weatherText || (geo.locating ? t('weather.locating') : t('weather.loading')) }}</span>
       </div>
       <div v-if="weather.temp != null" class="card-text sub">
         <strong>{{ weather.city }}</strong>
@@ -230,7 +230,7 @@ function go(name) {
               class="swatch"
               :class="{ active: settings.accent === c.id }"
               :style="{ background: c.hex }"
-              :title="c.name"
+              :title="t(c.nameKey)"
               @click="pickAccent(c.id)"
             />
           </div>

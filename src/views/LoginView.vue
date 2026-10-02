@@ -25,12 +25,19 @@ const fileInput = ref(null)
 
 const user = computed(() => state.session)
 
-const ERROR_TEXT = {
-  invalid_email: '邮箱格式不正确',
-  weak_password: '密码至少 6 位',
-  email_taken: '该邮箱已注册',
-  bad_credentials: '邮箱或密码不正确',
-  disabled: '账号已被禁用',
+/**
+ * 后端错误码 → i18n key。
+ *
+ * ⚠️ 这几条**只在输错的时候**才出现，所以 `i18n-render`（扫正常渲染的页面）
+ *    永远碰不到它们 —— 2026-10-02 之前它们就是硬编码中文，
+ *    表现是英文界面下报中文错。补的第三道守卫是 `scan-hardcoded-text.mjs`。
+ */
+const ERROR_KEYS = {
+  invalid_email: 'auth.errInvalidEmail',
+  weak_password: 'auth.errWeakPassword',
+  email_taken: 'auth.errEmailTaken',
+  bad_credentials: 'auth.errBadCredentials',
+  disabled: 'auth.errDisabled',
 }
 
 async function submit() {
@@ -55,7 +62,7 @@ async function submit() {
        */
       router.push(safeRedirect(route.query.redirect) || '/')
     } else {
-      error.value = ERROR_TEXT[res.error] || '操作失败'
+      error.value = ERROR_KEYS[res.error] ? t(ERROR_KEYS[res.error]) : t('auth.errGeneric')
     }
   } finally {
     busy.value = false

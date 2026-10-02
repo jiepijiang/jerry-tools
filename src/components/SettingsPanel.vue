@@ -503,7 +503,7 @@ async function copyShare() {
                 class="swatch-lg"
                 :class="{ active: settings.accent === c.id }"
                 :style="{ background: c.hex }"
-                :title="c.name"
+                :title="t(c.nameKey)"
                 @click="pick('accent', c.id)"
               >
                 <AppIcon v-if="settings.accent === c.id" name="Check" :size="14" />
@@ -520,7 +520,7 @@ async function copyShare() {
                 class="grad-chip"
                 :class="{ active: settings.iconGradient === g.id }"
                 :style="{ background: `linear-gradient(135deg, ${g.colors[0][0]}, ${g.colors[1][0]}, ${g.colors[3][0]})` }"
-                :title="g.name"
+                :title="t(g.nameKey)"
                 @click="pick('iconGradient', g.id)"
               />
             </div>

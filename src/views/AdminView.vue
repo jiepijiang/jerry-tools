@@ -391,7 +391,7 @@ async function sendReply() {
             <button class="mini" :title="t('admin.needAuth')" @click="toggleDisabled(u)">
               <AppIcon :name="u.disabled ? 'XCircle' : 'CheckCircle'" :size="14" />
             </button>
-            <button class="mini" :title="'备注'" @click="openNote(u)"><AppIcon name="Pencil" :size="14" /></button>
+            <button class="mini" :title="t('admin.note')" @click="openNote(u)"><AppIcon name="Pencil" :size="14" /></button>
             <button class="mini danger" @click="removeUser(u)"><AppIcon name="Trash2" :size="14" /></button>
           </div>
         </div>
@@ -495,8 +495,8 @@ async function sendReply() {
     </Modal>
 
     <!-- 备注弹窗 -->
-    <Modal v-model="noteDialog.open" :title="'编辑备注'" size="sm">
-      <textarea v-model="noteDialog.note" class="field" rows="3" placeholder="输入备注信息..." />
+    <Modal v-model="noteDialog.open" :title="t('admin.noteEdit')" size="sm">
+      <textarea v-model="noteDialog.note" class="field" rows="3" :placeholder="t('admin.notePlaceholder')" />
       <template #footer>
         <button class="btn-ghost" @click="noteDialog.open = false">{{ t('common.cancel') }}</button>
         <button class="btn-primary" @click="saveNote">{{ t('common.save') }}</button>
