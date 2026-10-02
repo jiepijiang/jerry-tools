@@ -12,7 +12,7 @@ import { searchEngines } from '@/data/seed'
 import { resetSettings, setSetting, settings } from '@/composables/useSettings'
 import { geo, refreshWeather, setWeatherCity, useMyLocation, weather } from '@/composables/useClock'
 import { useI18n } from '@/composables/useI18n'
-import { resetToDefaults, state, updateShare } from '@/composables/useStore'
+import { resetToDefaults, addFeedback, state, updateShare } from '@/composables/useStore'
 import { isLoggedIn, pushLocalToCloud } from '@/composables/useAuth'
 import { exportSnapshot, storage } from '@/data/storage'
 import { storageKeys } from '@/data/options'
@@ -34,6 +34,7 @@ const SECTIONS = [
   { id: 'content', labelKey: 'scope.title', icon: 'SlidersHorizontal' },
   { id: 'weather', labelKey: 'weather.title', icon: 'CloudSun' },
   { id: 'share', labelKey: 'share.title', icon: 'Link' },
+  { id: 'feedback', labelKey: 'feedback.title', icon: 'MessageSquare' },
   { id: 'data', labelKey: 'settings.data', icon: 'Database' },
 ]
 
@@ -43,6 +44,49 @@ const shareSlug = ref(state.share.slug)
 const weatherCityInput = ref(settings.weatherCity)
 const fileInput = ref(null)
 const cloudUploading = ref(false)
+
+/* ---------------------------------------------------------------- 反馈 */
+
+const fbContent = ref('')
+const fbContact = ref('')
+const fbSending = ref(false)
+
+/**
+ * 「我的反馈」。
+ *
+ * ⚠️ 要按 `userId` 过滤：管理员登录时 `state.feedback` 里是**所有人**的反馈
+ *    （策略 `user_id = auth.uid() or is_admin()`），不过滤的话管理员在设置面板里
+ *    会看到别人写的东西。`userId` 由 `SPECS.feedback.fromDb` 补上。
+ */
+const myFeedback = computed(() => {
+  const me = state.session?.id
+  return state.feedback.filter((f) => (f.userId && me ? f.userId === me : true))
+})
+
+async function sendFeedback() {
+  if (fbSending.value) return
+  if (!fbContent.value.trim()) {
+    toast(t('feedback.needContent'), 'error')
+    return
+  }
+  if (!isLoggedIn.value) {
+    toast(t('feedback.loginRequired'), 'error')
+    return
+  }
+  fbSending.value = true
+  try {
+    const { ok, reason } = await addFeedback({ content: fbContent.value, contact: fbContact.value })
+    if (ok) {
+      fbContent.value = ''
+      fbContact.value = ''
+      toast(t('feedback.submitted'))
+    } else {
+      toast(reason === 'offline' ? t('feedback.offline') : t('toast.saveFail'), 'error')
+    }
+  } finally {
+    fbSending.value = false
+  }
+}
 
 watch(
   () => props.modelValue,
@@ -694,6 +738,53 @@ async function copyShare() {
         </template>
 
         <!-- ============ 数据 ============ -->
+        <!-- ============ 反馈 ============ -->
+        <!--
+          ⚠️ 这是**用户侧**唯一的反馈入口（2026-10-02 才接上）。
+          在这之前整条链路都没实现：`feedback` 表有、策略也齐，但没有任何地方
+          能创建一条反馈 —— `/admin` 的「反馈」tab 因此永远是空的，
+          看着像「没人反馈」，其实是「没做」。
+        -->
+        <template v-else-if="section === 'feedback'">
+          <div class="group">
+            <label class="group-label">{{ t('feedback.title') }}</label>
+            <p class="group-hint">{{ t('feedback.hint') }}</p>
+            <textarea
+              v-model="fbContent"
+              class="field"
+              rows="4"
+              :placeholder="t('feedback.contentPlaceholder')"
+            />
+            <input v-model="fbContact" class="field" :placeholder="t('feedback.contactPlaceholder')" />
+            <button class="btn-primary" :disabled="fbSending" @click="sendFeedback">
+              {{ fbSending ? t('feedback.submitting') : t('feedback.submit') }}
+            </button>
+            <p v-if="!isLoggedIn" class="warn">
+              <AppIcon name="AlertCircle" :size="13" />{{ t('feedback.loginRequired') }}
+            </p>
+          </div>
+
+          <div class="group">
+            <label class="group-label">{{ t('feedback.mine') }}</label>
+            <p v-if="!myFeedback.length" class="group-hint">{{ t('feedback.empty') }}</p>
+            <div v-for="f in myFeedback" :key="f.id" class="fb-item">
+              <div class="fb-item-head">
+                <span>{{ f.createdAt }}</span>
+                <em class="fb-item-status" :class="f.status || 'open'">
+                  <template v-if="f.status === 'replied'">{{ t('feedback.statusReplied') }}</template>
+                  <template v-else-if="f.status === 'closed'">{{ t('feedback.statusClosed') }}</template>
+                  <template v-else>{{ t('feedback.statusOpen') }}</template>
+                </em>
+              </div>
+              <p class="fb-item-body">{{ f.content }}</p>
+              <div v-if="f.reply" class="fb-item-reply">
+                <span class="who">{{ t('feedback.replyLabel') }}</span>
+                <p>{{ f.reply }}</p>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <template v-else>
           <div class="group">
             <label class="group-label">{{ t('settings.data') }}</label>
@@ -1109,6 +1200,77 @@ async function copyShare() {
   color: var(--muted_text_color);
   font-size: 13.5px;
   line-height: 1.65;
+}
+
+/* —— 反馈：我的反馈列表 —— */
+
+.fb-item {
+  background-color: var(--text_bg_color);
+  border-radius: var(--radius-md, 10px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.fb-item-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.fb-item-head > span {
+  color: var(--muted_text_color);
+  font-size: 11.5px;
+}
+
+/* 状态小标：`:class` 绑的是库里的 status 原值（open / replied / closed）。 */
+.fb-item-status {
+  border-radius: 999px;
+  font-size: 11px;
+  font-style: normal;
+  padding: 1px 8px;
+}
+
+.fb-item-status.open {
+  background-color: var(--border_color);
+  color: var(--muted_text_color);
+}
+
+.fb-item-status.replied {
+  background-color: var(--purple_text_color, var(--border_color));
+  color: #fff;
+}
+
+.fb-item-status.closed {
+  background-color: var(--border_color);
+  color: var(--muted_text_color);
+  opacity: 0.6;
+}
+
+.fb-item-body {
+  color: var(--text_color);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.fb-item-reply {
+  border-left: 2px solid var(--purple_text_color, var(--border_color));
+  padding-left: 10px;
+}
+
+.fb-item-reply .who {
+  color: var(--muted_text_color);
+  font-size: 11.5px;
+}
+
+.fb-item-reply p {
+  color: var(--muted_text_color);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 640px) {

@@ -17,6 +17,7 @@ import {
 } from '@/composables/useAuth'
 import {
   deleteSite,
+  setFeedbackReply,
   state,
   updateSite,
 } from '@/composables/useStore'
@@ -49,6 +50,7 @@ const userForm = ref({ email: '', password: '', nickname: '', isAdmin: false })
 const noteDialog = ref({ open: false, user: null, note: '' })
 
 const replyDialog = ref({ open: false, item: null, text: '' })
+const replying = ref(false)
 
 /* ---------------------------------------------------------------- 派生 */
 
@@ -205,17 +207,37 @@ async function setIcon(s, url) {
 }
 
 /* —— 反馈 —— */
+
+/**
+ * ⚠️ 回复走 `setFeedbackReply()` → RPC `reply_feedback`，**不是**整表写。
+ *
+ * 原来这里往 `item.replies[]` 里 push 一个对象，两个问题：
+ *   1. `replies` 这个字段**库里根本没有** —— 表里是单条 `reply` +
+ *      `status` + `replied_at`。形状不匹配，不是「漏了一行 persist」。
+ *   2. 完全没有落盘，而且 toast 无条件报「已发送」。
+ *
+ * 现在判据是 RPC 的返回值：非管理员会被函数内那句 `is_admin()` 挡下，
+ * 返回 false → 如实报失败，并**回滚**内存里的乐观更新（在 useStore 里做）。
+ */
 function openReply(item) {
-  replyDialog.value = { open: true, item, text: '' }
+  replyDialog.value = { open: true, item, text: item.reply || '' }
 }
 
 async function sendReply() {
   const { item, text } = replyDialog.value
-  if (!text.trim()) return
-  item.replies = item.replies || []
-  item.replies.push({ content: text.trim(), isAdmin: true, createdAt: new Date().toISOString().slice(0, 10) })
-  replyDialog.value.open = false
-  toast(t('admin.feedbackSend'))
+  if (!text.trim() || replying.value) return
+  replying.value = true
+  try {
+    const { ok, reason } = await setFeedbackReply(item, text)
+    if (ok) {
+      replyDialog.value.open = false
+      toast(t('feedback.replyOk'))
+    } else {
+      toast(reason === 'offline' ? t('feedback.offline') : t('feedback.replyFail'), 'error')
+    }
+  } finally {
+    replying.value = false
+  }
 }
 </script>
 
@@ -409,15 +431,32 @@ async function sendReply() {
         <div class="row-list">
           <div v-for="f in feedbackList" :key="f.id" class="fb-card glass">
             <div class="fb-head">
-              <strong>{{ f.userEmail || t('auth.anonymous') }}</strong>
+              <!--
+                ⚠️ 以前这里是 `f.userEmail`，而表里**没有这一列** ——
+                   所以永远回落到「匿名」。表里真正存在的联系字段是 `contact`。
+              -->
+              <strong>{{ f.contact || t('feedback.noContact') }}</strong>
               <span>{{ f.createdAt }}</span>
+              <em class="fb-status" :class="f.status || 'open'">
+                <template v-if="f.status === 'replied'">{{ t('feedback.statusReplied') }}</template>
+                <template v-else-if="f.status === 'closed'">{{ t('feedback.statusClosed') }}</template>
+                <template v-else>{{ t('feedback.statusOpen') }}</template>
+              </em>
             </div>
             <p class="fb-body">{{ f.content }}</p>
-            <div v-for="(r, i) in f.replies || []" :key="i" class="fb-reply" :class="{ admin: r.isAdmin }">
-              <span class="who">{{ r.isAdmin ? 'admin' : 'user' }}</span>
-              <p>{{ r.content }}</p>
+            <!--
+              表里是**单条** `reply` + `status` + `replied_at`，不是一串 threads。
+              以前这里 `v-for="r in f.replies"` —— 那个字段库里没有，
+              而且 `rowToLocal()` 也永远不会产出它，所以永远渲染不出东西。
+            -->
+            <div v-if="f.reply" class="fb-reply admin">
+              <span class="who">{{ t('feedback.replyLabel') }}</span>
+              <p>{{ f.reply }}</p>
             </div>
-            <button class="btn-ghost sm" @click="openReply(f)">
+            <button v-if="f.reply" class="btn-ghost sm" @click="openReply(f)">
+              <AppIcon name="MessageSquare" :size="14" />{{ t('feedback.replyAgain') }}
+            </button>
+            <button v-else class="btn-ghost sm" @click="openReply(f)">
               <AppIcon name="MessageSquare" :size="14" />{{ t('admin.feedbackReply') }}
             </button>
           </div>
@@ -469,7 +508,9 @@ async function sendReply() {
       <textarea v-model="replyDialog.text" class="field" rows="3" :placeholder="t('admin.feedbackPlaceholder')" />
       <template #footer>
         <button class="btn-ghost" @click="replyDialog.open = false">{{ t('common.cancel') }}</button>
-        <button class="btn-primary" @click="sendReply">{{ t('admin.feedbackSend') }}</button>
+        <button class="btn-primary" :disabled="replying" @click="sendReply">
+          {{ replying ? t('feedback.submitting') : t('admin.feedbackSend') }}
+        </button>
       </template>
     </Modal>
   </div>
@@ -876,6 +917,30 @@ async function sendReply() {
 .fb-head span {
   color: var(--muted_text_color);
   font-size: 11.5px;
+}
+
+/* 状态小标：open / replied / closed。`:class` 绑的是库里的 status 原值。 */
+.fb-status {
+  border-radius: 999px;
+  font-size: 11px;
+  font-style: normal;
+  padding: 1px 8px;
+}
+
+.fb-status.open {
+  background-color: var(--text_bg_color);
+  color: var(--muted_text_color);
+}
+
+.fb-status.replied {
+  background-color: var(--purple_text_color, var(--text_bg_color));
+  color: #fff;
+}
+
+.fb-status.closed {
+  background-color: var(--text_bg_color);
+  color: var(--muted_text_color);
+  opacity: 0.6;
 }
 
 .fb-body {

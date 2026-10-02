@@ -11,6 +11,7 @@ import { storage, isCloudActive } from '@/data/storage'
 import { storageKeys } from '@/data/options'
 import { seedBookmarks, seedCategories } from '@/data/seed'
 import { seedSites } from '@/data/seed-discover'
+import { replyFeedback, submitFeedback } from '@/data/feedback'
 import { buildTree, bookmarkKey, clone, flattenTree, formatDate, normalizeUrl, uid } from '@/utils/helpers'
 
 export const state = reactive({
@@ -1031,6 +1032,90 @@ export async function persistSubmissions() {
   return persist(storageKeys.submissions, state.submissions)
 }
 
-export async function persistFeedback() {
-  return persist(storageKeys.feedback, state.feedback)
+/* ------------------------------------------------------------------ 反馈 */
+
+/**
+ * 提一条反馈。
+ *
+ * ⚠️ **不经过 `persist()`** —— `feedback` 在客户端是**只读表**
+ *    （`SPECS.feedback.rpcOnly = true`），写入只能走 RPC。
+ *    见 `src/data/feedback.js` 与 `supabase/migrations/006-feedback-rpc.sql`。
+ *
+ * 这里手写「乐观更新 + 失败回滚」，而不是复用 `withRollback()` ——
+ * 后者的 `persist()` 走的是整表写，对只读表会被 `writeCloud()` 直接拒掉。
+ *
+ * @returns {Promise<{ ok: boolean, reason?: string, id?: string }>}
+ */
+export async function addFeedback({ content, contact = '' }) {
+  const text = String(content || '').trim()
+  if (!text) return { ok: false, reason: 'empty' }
+
+  const prev = clone(state.feedback)
+  const item = {
+    id: uid('fb'),
+    // 管理员回复要按 (user_id, id) 定位，所以自己的行也带上 ——
+    // 云端读回来的行由 SPECS.feedback.fromDb 补这个字段。
+    userId: state.session?.id || null,
+    content: text,
+    contact: String(contact || '').trim(),
+    status: 'open',
+    reply: '',
+    createdAt: formatDate(),
+  }
+  state.feedback.unshift(item)
+
+  try {
+    const { ok, reason } = await submitFeedback({
+      id: item.id,
+      content: item.content,
+      contact: item.contact,
+    })
+    if (!ok) {
+      state.feedback = prev
+      return { ok: false, reason }
+    }
+    return { ok: true, id: item.id }
+  } catch (err) {
+    console.warn('[feedback] 提交失败，已回滚：', err)
+    state.feedback = prev
+    return { ok: false, reason: 'error' }
+  }
+}
+
+/**
+ * 管理员回复一条反馈。
+ *
+ * ⚠️ 必须带 `userId`（被回复那条反馈的**所有者**）——
+ *    表的主键是 `(user_id, id)`，`id` 单独并不唯一。
+ *
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function setFeedbackReply(fb, reply) {
+  const text = String(reply || '').trim()
+  if (!text) return { ok: false, reason: 'empty' }
+  if (!fb?.userId || !fb?.id) return { ok: false, reason: 'rejected' }
+
+  const idx = state.feedback.findIndex((x) => x.id === fb.id && x.userId === fb.userId)
+  if (idx < 0) return { ok: false, reason: 'rejected' }
+
+  const prev = clone(state.feedback)
+  state.feedback[idx] = {
+    ...state.feedback[idx],
+    reply: text,
+    status: 'replied',
+    repliedAt: formatDate(),
+  }
+
+  try {
+    const { ok, reason } = await replyFeedback({ userId: fb.userId, id: fb.id, reply: text })
+    if (!ok) {
+      state.feedback = prev
+      return { ok: false, reason }
+    }
+    return { ok: true }
+  } catch (err) {
+    console.warn('[feedback] 回复失败，已回滚：', err)
+    state.feedback = prev
+    return { ok: false, reason: 'error' }
+  }
 }

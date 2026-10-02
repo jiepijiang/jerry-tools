@@ -118,12 +118,26 @@ const SPECS = {
     columns: ['id', 'title', 'url', 'description', 'category', 'subcategory', 'status', 'review_note', 'created_at'],
     defaults: { title: '', url: '', description: '', category: '其他', subcategory: '', status: 'pending', review_note: '', created_at: today },
   },
+  // 反馈：客户端**只读**，写入全走 RPC
+  // （见 `supabase/migrations/006-feedback-rpc.sql` 与 `src/data/feedback.js`）。
+  //
+  // `rpcOnly` 让 `writeCloud()` 直接拒写 —— 不是「记得别调 persistFeedback()」，
+  // 是**想绕也绕不过去**。原因：`rowToLocal()` 会把 `user_id` 丢掉、
+  // `localToRow()` 又会给每一行盖上**当前用户**的 uid，而管理员能读到
+  // 所有人的反馈 → 「整表写回」会把别人的行也盖成管理员的 uid，
+  // `on conflict (user_id, id)` 匹配不上 → 插出一条副本，原行纹丝不动。
+  //
+  // ⚠️ `replied_at` 必须列在 `columns` 里，否则回复写上去之后读回来没这一列。
+  // ⚠️ `fromDb` 把 `user_id` 保留成 `userId` —— 管理员回复要按 `(user_id, id)`
+  //    定位（主键就是这两列，`id` 单独并不唯一），而 `rowToLocal()` 默认丢掉它。
   [storageKeys.feedback]: {
     table: 'feedback',
     kind: 'rows',
     conflict: 'user_id,id',
-    columns: ['id', 'content', 'contact', 'status', 'reply', 'created_at'],
-    defaults: { content: '', contact: '', status: 'open', reply: '', created_at: today },
+    rpcOnly: true,
+    columns: ['id', 'content', 'contact', 'status', 'reply', 'created_at', 'replied_at'],
+    defaults: { content: '', contact: '', status: 'open', reply: '', created_at: today, replied_at: null },
+    fromDb: (row) => ({ ...rowToLocal(row), userId: row.user_id }),
   },
   [storageKeys.favorites]: { table: 'favorites', kind: 'ids', idColumn: 'site_id', conflict: 'user_id,site_id' },
   [storageKeys.visits]: { table: 'visits', kind: 'map', idColumn: 'bookmark_id', valueColumn: 'count', conflict: 'user_id,bookmark_id' },
@@ -444,6 +458,14 @@ async function writeSites(prevRows, nextRows) {
 async function writeCloud(key, value) {
   const spec = SPECS[key]
   if (!spec) return true
+
+  // 只读表（写入走 RPC，见 SPECS[feedback] 的注释）。
+  // 做成**硬拒绝**而不是「约定别调」—— 这类约定迟早会被绕过去，
+  // 而绕过之后的症状是「管理员回复成功、用户永远看不到」，非常难查。
+  if (spec.rpcOnly) {
+    console.error(`[cloud] ${spec.table} 是只读表（写入走 RPC），拒绝整表写`)
+    return false
+  }
 
   const userId = await currentUserId()
   if (!userId) throw new Error('未登录，不能写云端')
