@@ -138,7 +138,12 @@ Pages 的 source 必须是 **GitHub Actions**。
 - 用户管理：新建 / 编辑 / 删除、设为管理员、禁用、备注
 - 图标管理：独立路由 `/icon-management`（对齐参考站），搜索、上传本地图片、
   粘贴图标地址、恢复自动图标；后台里也有入口按钮
-- 反馈：查看与回复
+- 反馈：用户在**设置面板**提交（内容 + 可选联系方式），管理员在后台查看与回复
+  （2026-10-02 接上，写入走 RPC —— 见「`submissions` / `feedback` 两张表」那节）
+
+> ⚠️ `/admin` 和 `/icon-management` 有**路由守卫**：未登录跳登录页、
+> 非管理员弹回首页。但**守卫是体验不是安全** —— 真正的权限判断在数据库 RLS 上，
+> 绕过守卫也做不成任何事。本机模式（没配 Supabase）守卫放行，见「路由守卫」一节。
 
 ### 数据
 
@@ -1353,7 +1358,7 @@ const all = supabaseConfigured
    第一次跑碰巧命中同一个实例，之后就全是空数组。
    改成**走界面点击**，用的是 app 自己那份实例。
 
-#### ⚠️ `submissions` / `feedback` 两张表：不是隐患，是**没接**
+#### ⚠️ `submissions` / `feedback` 两张表：不是隐患，是**没接** → 其中一张已接上
 
 写上面那节时我顺手记了「这两张表也有『能看见但写不了』的组合，将来接上会复现」。
 **动态验了一遍（`feedback-path-audit.mjs`，7 / 0）之后发现说重了**，实际是这样：
@@ -1361,32 +1366,82 @@ const all = supabaseConfigured
 | 表 | 真实状态 |
 | --- | --- |
 | `submissions` | **弃用表**。用户提交站点走的是 `DiscoverView.doSubmit()` → `createSite(..., 'pending')` → 写 **`discover_sites`**（策略放行 `submitted_by = auth.uid() and status = 'pending'`），跟这张表**没有任何关系** |
-| `feedback` | **整条链路没实现**。全仓没有任何地方能**创建**一条反馈 |
+| `feedback` | 原本**整条链路没实现**；**2026-10-02 已接上**（见下） |
 
-`feedback` 那半边的证据（都实测过，不是读代码推的）：
+`feedback` 接上**之前**的证据（都实测过，不是读代码推的）：
 
-- 云端 `feedback` / `submissions` 两张表当前账号可见 **0 行**（`content-range` 总数 0）。
+- 云端 `feedback` / `submissions` 两张表当时可见 **0 行**（`content-range` 总数 0）。
 - `/admin` 的「反馈」tab 点进去**永远是空列表**（`.fb-card` = 0，只有空态），
   而且这个 tab 里**一个按钮都没有**（没有「新建 / 提交」入口）。
 - 用户侧四个页面（首页 / 发现 / 图标管理 / 设置面板）**都不出现「反馈」二字**。
 - 于是 `AdminView.sendReply()` **根本触发不了** ——
   没有反馈条目就没有「回复」按钮。它是**死代码**，不是「能用但没落盘」。
 
-⚠️ 所以这里有个更容易误导人的东西：**`/admin` 的「反馈」tab 是一个永远空的面板。**
+⚠️ 这里有个最容易误导人的地方：**`/admin` 的「反馈」tab 是一个永远空的面板。**
 管理员点进去看到「暂无反馈」，会读成「**没人反馈**」，而真相是「**这个功能没做**」。
 两种含义在界面上长得一模一样 —— 和「写失败却报成功」是同一族问题的**镜像**：
 **「没有数据」和「没有功能」在界面上长得一样。**
 
-真要接的时候，注意两件事：
+##### 2026-10-02 接上了：写入全走 RPC
 
-1. `feedback` 表的形状是 **`reply`（单条 text）+ `status`（open/replied/closed）+
-   `replied_at`** —— 而 `AdminView` 现在读写的是 **`f.replies[]`（数组）**，
-   这个字段**库里根本没有**，也不在 `SPECS[feedback].columns` 里，
-   就算调了 `persistFeedback()` 也会被 `localToRows` 丢掉。**是形状不匹配，不是漏了一行。**
-2. 接上之后就会撞上前面那节说的「静默 0 行」—— `feedback_update using (is_admin())`。
-   通用 `writeCloud`（`upsert` + `delete`）**没有** 0 行检查，所以要么给这张表
-   单独开检查，要么把它挪出通用路径，**别直接复用**。
-   （没顺手给通用路径加的理由见上一节：私有表不存在这种情况，硬加会引入假失败。）
+`supabase/migrations/006-feedback-rpc.sql` 建两个函数，客户端把 `feedback`
+当**只读表**（`SPECS[feedback].rpcOnly = true`，`writeCloud()` 硬拒绝整表写）。
+
+| 函数 | 安全级别 | 为什么 |
+| --- | --- | --- |
+| `submit_feedback` | **SECURITY INVOKER** | 提反馈就是写自己的行，让 RLS 的 `with check` 再兜一道 |
+| `reply_feedback` | **SECURITY DEFINER** | 要改**别人的**行；函数内自己判 `is_admin()`，`return found` 不靠 error |
+
+**为什么不能用通用路径**（这是这次最重要的设计约束）：
+
+1. 🔴 `rowToLocal()` 会把 `user_id` 丢掉、`localToRow()` 又给每一行盖上**当前用户**的 uid。
+   管理员能读到**所有人**的反馈 → 「读回全部 → 改一条 → 整表写回」会把别人的行
+   也盖成管理员的 uid，`on conflict (user_id, id)` 匹配不上 → **插出一条副本**，
+   原行纹丝不动。**症状是「管理员回复成功、用户永远看不到」。**
+   （`feedback` 还订阅了实时，别人新提交的会进管理员内存，隐患更大。）
+2. 🔴 被 RLS 挡掉的 update 不报错、只影响 0 行（见「写失败却报成功」那节）。
+   两个函数**显式 `return boolean`**，客户端拿到的是真信号。
+
+配套改动：`SPECS[feedback]` 补上漏掉的 `replied_at`、加 `fromDb` 把 `user_id`
+保留成 `userId`（管理员回复要按 `(user_id, id)` 定位，主键就是这两列）；
+用户侧入口在**设置面板**新增的「反馈」分区（⚠️「我的反馈」列表要**按 `userId` 过滤**，
+否则管理员会看到别人写的东西）；`AdminView` 的回复走 RPC + 如实报错，
+列表渲染单条 `reply`，联系人字段从**库里不存在的** `f.userEmail` 改成真实存在的 `f.contact`。
+
+**验证**（`feedback-flow.mjs`）：
+
+| 层 | 结果 |
+| --- | --- |
+| dev | **29 / 0** |
+| dist | **27 / 0 / 1 跳过**（跳过的是 dev 限定的 `rpcOnly` 整表写断言） |
+| 迁移本身（PGlite） | **30 / 0**（造红 28/2） |
+
+⚠️ **迁移递出去之前先用 PGlite 跑了一遍** —— 这份 SQL 只能由人在 SQL Editor 里手工跑，
+**在点「执行」之前一次都没被执行过**。PGlite 里桩掉 `auth.uid()` / `is_admin()`
+（读一张可切换的 `auth._ctx`）+ `anon`/`authenticated` 角色 + 照抄 schema 的 `feedback` 表，
+切上下文就能把未登录 / 用户 / 管理员三种身份各走一遍。
+造红：`return found` 改成 `return true` → 立刻红两条。
+
+> ⚠️ 探针在库里留一行反馈（**用户删不掉自己的反馈** ——
+> `feedback_delete using (is_admin())` 只放行 admin）。
+> 清理：`delete from public.feedback where id like '__probe_fb%';`
+
+##### 🔴 S6 顺手把「守卫是体验、RPC 才是安全」测出来了
+
+路由守卫生效之后，非管理员**根本进不去 `/admin`**，原来那段「点回复」的用例直接超时。
+改法不是绕过守卫，而是给探针装个夹具把 `profiles.role` 改成 `admin`：
+
+- 客户端认为「我是管理员」→ **守卫放行**，页面进得去；
+- 但 `reply_feedback` 里的 `is_admin()` 是**服务端**判的，读的是真实 profile
+  （`role = user`）→ **返回 `false`**。
+
+于是这一条断言同时钉住了「守卫放行」和「服务端仍然拒绝」两件事。
+
+> ⚠️ 夹具只改一个字段，其余用真响应。第一版按**对象**改，**0 命中** ——
+> 实测这个版本的 `maybeSingle()` 请求头 Accept 是通配，
+> **拉数组再在客户端取第一个**。改成数组分支才生效。
+
+`submissions` 那边**仍然是弃用表**，没有写路径，不需要动。
 
 ---
 
@@ -2118,6 +2173,18 @@ Error: Sensitive content approval timed out. The operation was not authorized an
 
 ## 待办
 
+- [x] **接上「反馈」链路**（2026-10-02）
+      原来整条链路**没实现** —— 用户侧没有入口、`/admin` 的「反馈」tab 永远是空列表、
+      `sendReply()` 往库里不存在的 `f.replies[]` push 且完全不落盘。
+      现在：设置面板加「反馈」分区，写入全走 RPC（`006-feedback-rpc.sql`），
+      `feedback` 在客户端是**只读表**（`rpcOnly` 硬拒绝整表写）。
+      探针 dev **29/0**、dist **27/0/1 跳过**、迁移本身用 PGlite **30/0**。
+      详见「`submissions` / `feedback` 两张表」一节。
+- [ ] **用户删不掉自己的反馈** —— `feedback_delete using (is_admin())` 只放行 admin。
+      探针跑一次就在库里留一行，只能由管理员清。
+      要不要开一条「撤回自己的反馈」？（需要一条 RPC，别直接开 delete 策略。）
+- [ ] **`submissions` 是弃用表** —— 用户提交站点实际走 `discover_sites`，
+      这张表没有任何写路径。留着不占空间，但会让人以为它有用。
 - [x] **`/admin` 和 `/icon-management` 的路由守卫**（2026-10-02）
       原来这两个路由**没有任何守卫**，任何登录用户都能进，看到一屏他写不进去的按钮。
       现在：未登录跳 `/login?redirect=`、非管理员弹回首页并提示、**本机模式放行**

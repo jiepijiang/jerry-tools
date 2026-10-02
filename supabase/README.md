@@ -31,6 +31,15 @@
 >
 > ⚠️ **005 必须用 postgres 身份跑（SQL Editor）** —— 前端那个 anon key **建不了 bucket**。
 > 这不是配置问题，是设计如此。
+>
+> `006-feedback-rpc.sql` 建反馈的两个 RPC（`submit_feedback` / `reply_feedback`）—— 详见「十一、反馈」。
+> 不跑的话设置面板的「反馈」提交会报失败（**如实报**，不会假装成功）。
+> ✅ 本项目已于 2026-10-02 跑过。
+>
+> ⚠️ 同样**必须用 postgres 身份跑**（建函数）。
+> **递出去之前已用 PGlite 原样跑过一遍（30/0）** —— 这类只能手工执行的 SQL，
+> 在用户点「执行」之前一次都没被执行过，语法错 / 角色不存在 / `return found`
+> 写成 `return true` 都会到他那边才炸。
 
 ---
 
@@ -605,3 +614,63 @@ node dist-icon-storage.mjs           # 8 条：真产物里上传 + 解码页面
 - 白名单保留 `image/svg+xml`：正常路径只产出 WebP，svg 是转码失败时的降级，
   而 `BookmarkDialog` 的 `accept` 里本来就有它。理由与风险评估见
   主 `README.md` 的「上传的图改走 Storage」一节。
+
+---
+
+## 十一、反馈（RPC 写入）
+
+依赖一次迁移：**`006-feedback-rpc.sql`**（2026-10-02 已跑）。
+
+### 建了什么
+
+| 函数 | 安全级别 | 判据 |
+| --- | --- | --- |
+| `submit_feedback(p_id, p_content, p_contact)` | **SECURITY INVOKER** | `auth.uid()` 为空 → false；内容空 → false |
+| `reply_feedback(p_user_id, p_id, p_reply)` | **SECURITY DEFINER** | `is_admin()` 为假 → false；**`return found`**（影响 0 行 = false） |
+
+两个都 `grant execute ... to anon, authenticated`（函数内部自己判权限）。
+
+### 🔴 为什么必须走 RPC，不能让客户端直接写表
+
+1. **适配层会给每一行盖上当前用户的 `user_id`。**
+   `rowToLocal()` 把 `user_id` 丢掉、`localToRow()` 又补上**当前用户**的 uid。
+   而管理员能 select 到**所有人**的反馈（策略 `user_id = auth.uid() or is_admin()`），
+   于是「读回全部 → 改一条 → 整表写回」会把别人的行也盖成管理员的 uid，
+   `on conflict (user_id, id)` 匹配不上 → **插出一条副本**，原行纹丝不动。
+   **症状：管理员回复成功、用户永远看不到。**
+2. **被 RLS 挡掉的 update 不报错、只影响 0 行**（PostgREST 返回 204）。
+   两个函数**显式 `return boolean`**，客户端拿到的才是真信号。
+
+所以客户端把 `feedback` 当**只读表**：`SPECS[feedback].rpcOnly = true`，
+`writeCloud()` **硬拒绝**整表写（不是「约定别调」，是绕不过去）。
+
+### ⚠️ 两个必须记住的细节
+
+- **`return found` 不是 `return true`。** 写成 `true` 的话，
+  回复一个不存在的 id 也会报成功 —— 那就是「写失败却报成功」。
+  PGlite 探针里专门有一条盯着它（造红验过：改掉立刻红）。
+- **按 `(user_id, id)` 定位。** 主键就是这两列，`id` 单独并不唯一。
+  所以前端要能把 `user_id` 传回来 —— `SPECS[feedback].fromDb` 负责把它
+  保留成 `userId`（`rowToLocal()` 默认会丢掉）。
+
+### 怎么验的
+
+```bash
+# SQL 语义（PGlite，不需要任何凭据）—— 递出去之前先跑这个
+node pglite-006.mjs                       # 30 条（造红 28/2）
+
+# 端到端（要 dev server 5174）
+node feedback-flow.mjs                    # dev 29 条
+node feedback-flow.mjs http://127.0.0.1:4178/jerry-tools/   # dist 27 条 + 1 跳过
+```
+
+PGlite 里桩掉 `auth.uid()` / `is_admin()`（读一张可切换的 `auth._ctx`）、
+`anon` / `authenticated` 角色、照抄 schema 的 `feedback` 表 ——
+切上下文就能把**未登录 / 用户 / 管理员**三种身份各走一遍。
+
+### 已知限制
+
+- **用户删不掉自己的反馈**（`feedback_delete using (is_admin())` 只放行 admin）。
+  探针跑一次留一行，清理：`delete from public.feedback where id like '__probe_fb%';`
+- 回复是**单条**（`reply` + `status` + `replied_at`），不是会话。
+  表结构就是这么设计的，UI 也按单条渲染。
