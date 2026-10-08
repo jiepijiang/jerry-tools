@@ -36,6 +36,22 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: 检查 i18n（静态）
+        # 两道纯静态守卫，**放在 npm ci 之前**：它们零依赖
+        # （只读 src/ 源码 + 直接 import src/data/i18n.js，那个文件自己不 import 任何东西），
+        # 文案漏了就别浪费一次安装和构建。
+        #
+        #   check-i18n-parity  键位对齐 / 占位符一致 / 引用的键存在
+        #   check-i18n-text    源码里有没有「该翻译但硬编码」的中文
+        #
+        # ⚠️ 第二道是 2026-10-02 补的 —— 前两道（parity + 渲染层）各有结构性盲区：
+        #    parity 只扫 `t('…')` 的字面量（压根没调 t() 的它看不见），
+        #    渲染层只扫正常渲染的页面（错误分支 / 冷门分支扫不到）。
+        #    合起来看着像「i18n 已经守住了」，实际漏了约 25 条用户可见的中文。
+        #
+        # 两道都用退出码报错（1 = 有问题），所以这里不需要额外判断。
+        run: npm run check:i18n
+
       - name: Install dependencies
         run: npm ci
 

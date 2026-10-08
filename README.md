@@ -18,9 +18,10 @@
 
 ```bash
 npm install
-npm run dev      # 开发预览 http://127.0.0.1:5174
-npm run build    # 产出 dist/
-npm run preview  # 预览构建产物
+npm run dev        # 开发预览 http://127.0.0.1:5174
+npm run build      # 产出 dist/
+npm run preview    # 预览构建产物
+npm run check:i18n # 静态 i18n 守卫（键位 / 硬编码文案），CI 每次 push 也会跑
 ```
 
 **不配后端也能跑** —— 开箱即用，数据存浏览器 `localStorage`。
@@ -2227,10 +2228,10 @@ Error: Sensitive content approval timed out. The operation was not authorized an
 
 | 层 | 命令 | 结果 |
 | --- | --- | --- |
-| 静态 | `i18n-text-guard.mjs` | **6 / 0**（造红 2 次：注入硬编码 → 红；删一个 WMO key → 红） |
-| 静态 | `i18n-parity.mjs` | **15 / 0**（修完注释 bug 后；造红：引用不存在的键 → 红） |
-| dist 渲染 | `i18n-render.mjs` | **14 / 0** |
-| dev + dist | `i18n-en-check.mjs`（新） | **15 / 0 / 0**（造红：英文日期改回中文格式 → 红 2 条） |
+| 静态 | `npm run check:i18n` → `scripts/check-i18n-text.mjs` | **6 / 0**（造红 2 次：注入硬编码 → 红；删一个 WMO key → 红） |
+| 静态 | `npm run check:i18n` → `scripts/check-i18n-parity.mjs` | **15 / 0**（修完注释 bug 后；造红：引用不存在的键 → 红） |
+| dist 渲染 | `/tmp/jerry-sb/i18n-render.mjs` | **14 / 0** |
+| dev + dist | `/tmp/jerry-sb/i18n-en-check.mjs`（新） | **15 / 0 / 0**（造红：英文日期改回中文格式 → 红 2 条） |
 
 `i18n-en-check.mjs` 是**切到英文、读真实渲染出来的文字**：
 顶栏日期 / 天气描述 / 主题色与渐变的 tooltip / 拖拽手柄 title /
@@ -2241,6 +2242,59 @@ Error: Sensitive content approval timed out. The operation was not authorized an
 ⚠️ 写它时踩了个坑：**语言是按浏览器上下文存的**（localStorage `jt:settings`），
 新开的 context 默认是 `zh` —— 不种这一下，测的还是中文，
 会**误判成「代码没改好」**。（登录还会切到云端那份设置，登录完要再点一次开关。）
+
+### 🔴 搬进仓库 + 挂进 CI（2026-10-05）
+
+**之前三道守卫都住在 `/tmp/jerry-sb/`** —— 跑不跑全凭记得，而且**脚本本身会被系统按文件清理**
+（已经丢过 `loader.mjs`、`i18n-parity.mjs`、`unit-cloud.mjs`、`empty-vs-first.mjs`…）。
+那不算守卫，那算「碰巧还在」。
+
+现在两道**纯静态**的搬进了仓库（它们零依赖，不需要浏览器、不需要 Supabase、不需要 dev server）：
+
+| 仓库里 | 原 `/tmp` 名 | 查什么 |
+| --- | --- | --- |
+| `scripts/check-i18n-parity.mjs` | `i18n-parity.mjs` | 键位双向一致 / 占位符一致 / 引用的键存在 |
+| `scripts/check-i18n-text.mjs` | `i18n-text-guard.mjs` | 源码里有没有「该翻译但硬编码」的中文 |
+
+```bash
+npm run check:i18n     # 两道都跑，任一失败 → 退出码 1
+```
+
+搬的时候改掉了两处**只在原机成立**的假设：
+
+- **绝对路径**（`/Users/jiepijiang/workbuddy-ai/jerry-tools`）→ 由脚本自身位置推出仓库根：
+  `path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')`。
+  CI 里的检出路径不叫这个，写死就必挂。
+- **`@/` 别名**（parity 原来 `import { messages } from '@/data/i18n'`）→ 改成
+  `'../src/data/i18n.js'`。用别名得挂 ESM loader，CI 里平白多一层依赖。
+  （`src/data/i18n.js` 自己不 import 任何东西，能直接读 —— 这也是它当初被选中当字典的原因。）
+
+**接进 CI，位置在 `npm ci` 之前**（`.github/workflows/deploy.yml`）：
+
+```yaml
+- name: 检查 i18n（静态）
+  run: npm run check:i18n
+```
+
+放这个位置是因为它们**零依赖** —— 文案漏了就别浪费一次安装和构建。
+
+`npm run check:i18n` 用的是 `p=$?; ... ; exit $((p + t > 0))` 而**不是 `&&`**：
+`&&` 短路的话，parity 挂了就看不到 text 的结果，得修两次、推两次。
+现在两道都跑完再报，一次看全。
+
+**验证（造红两次，两个方向都验了）**：
+
+| 造的因 | `npm run check:i18n` | 表现 |
+| --- | --- | --- |
+| 无 | **exit 0** | 全绿 |
+| 注入一条硬编码中文 | **exit 1** | text 那条红，**parity 的断言照样跑完** |
+| 删掉 `weather.wmo.65`（只让 parity 挂） | **exit 1** | parity 红 ×2，**text 的合计照样出来** |
+
+⚠️ 另外验过：脚本**从任意 cwd 跑都能过**（`cd /tmp && node …/scripts/check-i18n-parity.mjs` → 15/0）。
+CI 的工作目录、本地的工作目录、你手动 cd 到别处 —— 都得成立。
+
+剩下三道（`i18n-render` / `i18n-en-check` / `boot-timing`）**进不了 CI**：
+它们要真浏览器 + 真 Supabase（而登录还得穿过代理），属于端到端层，只能手工跑。
 
 ### 有意**没**改的两处
 
@@ -2354,11 +2408,13 @@ supabase 请求 15 发，几乎全是串行，每发 ~250ms（到 supabase 的 R
       `i18n-render` 扫不到错误分支），漏掉约 25 条用户可见的中文。
       全部搬进 `i18n.js`（中英各 64 条），并新增 `i18n-text-guard.mjs` 静态扫。
       详见「三道 i18n 守卫」一节。
-- [ ] **三道 i18n 守卫（还有别的探针）都住在 `/tmp/jerry-sb/`，会被系统按文件清理**
-      （已经丢过 `loader.mjs`、`i18n-parity.mjs`、`unit-cloud.mjs`）。
-      纯静态的那两道（`i18n-parity` / `i18n-text-guard`）**没有任何外部依赖**，
-      完全可以直接搬进仓库的 `scripts/` 并挂进 CI —— 那样它们才真的算「守卫」。
-      现在这样：跑不跑全凭记得，而且随时可能连脚本本身都没了。
+- [x] **把两道静态 i18n 守卫搬进仓库并挂进 CI**（2026-10-05）
+      `scripts/check-i18n-parity.mjs` + `scripts/check-i18n-text.mjs`，
+      `npm run check:i18n`，CI 里放在 `npm ci` **之前**。
+      搬的时候去掉了绝对路径与 `@/` 别名（否则 CI 里必挂）。
+      详见「三道 i18n 守卫 → 搬进仓库 + 挂进 CI」。
+      剩下三道（`i18n-render` / `i18n-en-check` / `boot-timing`）要真浏览器 + 真 Supabase，
+      **进不了 CI**，仍是手工层。
 - [x] **接上「反馈」链路**（2026-10-02）
       原来整条链路**没实现** —— 用户侧没有入口、`/admin` 的「反馈」tab 永远是空列表、
       `sendReply()` 往库里不存在的 `f.replies[]` push 且完全不落盘。
