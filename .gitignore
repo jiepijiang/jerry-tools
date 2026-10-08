@@ -2,6 +2,10 @@
 node_modules
 dist
 dist-ssr
+# ⚠️ `dist` 这个模式**只匹配叫 dist 的**，不匹配 dist-nosb。
+#    `npm run build:nosb`（本机模式产物，验匿名/未登录行为用）产出的是 dist-nosb，
+#    以前它不被忽略 —— 每次都得记着手动删，忘一次就把它提交进去了。
+dist-nosb
 .vite
 
 # 本地环境
