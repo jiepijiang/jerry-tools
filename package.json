@@ -12,7 +12,7 @@
     "serve:dist": "node scripts/serve-static.mjs dist /jerry-tools/ 5200",
     "probe:perf": "node scripts/perf-audit.mjs",
     "probe:interact": "node scripts/interact-audit.mjs",
-    "probe:seed": "node scripts/seed-lazy.mjs"
+    "probe:sites": "node scripts/sites-source.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",

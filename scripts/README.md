@@ -29,8 +29,15 @@ read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loa
 | 层 | 什么时候跑 | 有哪些 |
 | --- | --- | --- |
 | **`check-*`（静态）** | **CI 每次 push 自动跑** | `check-i18n-parity.mjs` · `check-i18n-text.mjs` |
-| **`probe-*`（端到端）** | **只能手工跑** | `perf-audit.mjs` · `interact-audit.mjs` · `seed-lazy.mjs` |
+| **`probe-*`（端到端）** | **只能手工跑** | `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` |
 | 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` |
+
+> ⚠️ 曾经还有一个 `seed-lazy.mjs`，**已删**。
+> 它的断言建立在「云端模式不该请求种子数据」这个前提上 —— 而那个前提
+> 后来被证明是错的（未登录访客本来就该拿种子当占位，见 README
+> 「发现页的数据从哪来」）。**一个断言写错前提的探针比没有更糟**：
+> 它会绿，而且会让人以为那件事被守住了。它要验的东西现在由
+> `sites-source.mjs` 用正确的判据覆盖。
 
 **为什么 `probe-*` 进不了 CI**：它们要**真浏览器 + 真 Supabase**
 （而登录还得穿过代理）。CI 里没有这些，硬塞进去只会得到一堆假红。
@@ -58,7 +65,7 @@ npm run build            # → dist/（云端模式）
 npm run build:nosb       # → dist-nosb/（本机模式，无 Supabase）
 npm run serve:dist       # 5200，服务 dist/
 node scripts/serve-static.mjs dist-nosb /jerry-tools/ 5201   # 5201，服务 dist-nosb/
-npm run probe:seed       # 两个 base 都打
+npm run probe:sites      # 两个 base 都打（发现页的数据来源）
 ```
 
 ### 写新探针时请遵守

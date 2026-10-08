@@ -8,6 +8,10 @@
 
 import { computed, reactive } from 'vue'
 import { storage, isCloudActive } from '@/data/storage'
+// ⚠️ 这两个只给 `refreshSitesFromCloud()` 用 —— 它要**绕开 `active` 适配器**
+//    直接读云端（未登录时 `active` 是本地那个）。理由见那个函数的注释。
+import { supabaseAdapter } from '@/data/adapters/cloud'
+import { supabaseConfigured } from '@/data/supabase'
 import { storageKeys } from '@/data/options'
 import { seedBookmarks, seedCategories } from '@/data/seed'
 import { seedSites } from '@/data/seed-discover'
@@ -540,6 +544,71 @@ export async function initStore() {
   initCrossTab()
   if (state.ready) return
   await loadAll()
+}
+
+/**
+ * 把「发现页」的数据从云端补一次 —— **未登录访客也要补**。
+ *
+ * 🔴 为什么需要它
+ *
+ * `active` 适配器要**登录之后**才切到云端（`useCloudStorage()` 唯一的调用点
+ * 是 `useAuth.enterCloudMode()`），所以未登录访客读的是本地 `jt:sites` ——
+ * 也就是第一次访问灌进去的那份**打包在 JS 里的种子快照**。
+ *
+ * 而 `sites` **不在 `SEED_ADDITIONS` 里**（那个机制目前只处理 bookmarks，
+ * 见 `syncSeedAdditions()` 的注释），所以那份快照**永远不会更新**：
+ * 本地键还在 → `decide()` 一直是 `'use'` → 连重新部署都到不了他那儿。
+ *
+ * 结果：Jerry 在后台审核通过的新站点，**未登录访客永远看不到**。
+ * 而公开站点的大多数访客恰恰是未登录的。
+ *
+ * 这里绕开 `active`，直接用 `supabaseAdapter` 读一次。
+ * `discover_sites` 是 `global: true` 的表，且 `fetchRows()` 只做 `select('*')`
+ * 不按 `user_id` 过滤（靠 RLS）—— anon 读得到，2026-10-08 实测过。
+ *
+ * 🔴 三个刻意的设计，改动前先读
+ *
+ * 1. **不 await、挂在 `mount()` 之后。**
+ *    未登录访客现在整个 boot 是**纯本地**的（适配器就是 localStorage，
+ *    没有任何网络读）。改成阻塞读等于给多数访客的挂载 +1 次往返（~250ms），
+ *    会把 2026-10-02 那轮「白屏 3.5s → 30ms」的优化吃掉。
+ *    所以是「**先渲染种子 → 云端到了再覆盖**」。
+ *
+ * 2. **只覆盖非空结果。读到 0 行时保持种子。**
+ *    因为分不清两种情况：「表真的是空的」和「RLS 静默挡住了、返回空数组」。
+ *    后者会让发现页**无声变空** —— 一个导航站最糟的失败形态。
+ *    宁可显示一份有用的旧列表，也不要在不确定时清空。
+ *    ⚠️ 已登录那条路径不受影响：它照旧走 `loadAll`，空表就是空表。
+ *
+ * 3. **失败只记一笔，绝不抛。**
+ *    适配器的 `readState` 在云端读失败时是**直接 throw** 的
+ *    （不像本地 `safeGet` 会吞成 null，见 `supabaseAdapter.readState` 的注释），
+ *    所以这里必须包住 —— 否则调用方拿到的是一个未处理的 Promise rejection。
+ *
+ * @returns {Promise<boolean>} 有没有真的用云端数据覆盖掉本地的种子
+ */
+export async function refreshSitesFromCloud() {
+  // 没配后端 → 本来就是纯本机模式，种子就是唯一数据源，没什么可补的
+  if (!supabaseConfigured) return false
+  // 已登录 → `loadAll` 已经从云端读过一遍了，别再打一次
+  if (isCloudActive()) return false
+
+  try {
+    const st = await supabaseAdapter.readState(storageKeys.sites)
+    if (st.state !== 'ok' || !Array.isArray(st.value)) return false
+
+    if (st.value.length === 0) {
+      // 见上面第 2 条：分不清「真的空」和「被静默挡住」，保持种子 + 留个痕
+      console.warn('[store] 云端发现页读到 0 行，保留本地兜底（可能是 RLS 静默挡住）')
+      return false
+    }
+
+    state.sites = st.value
+    return true
+  } catch (e) {
+    console.warn('[store] 补读发现页失败，保留本地兜底：', e.message)
+    return false
+  }
 }
 
 /**

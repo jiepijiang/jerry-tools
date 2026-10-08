@@ -2,7 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
 import { initSettings } from '@/composables/useSettings'
-import { initStore } from '@/composables/useStore'
+import { initStore, refreshSitesFromCloud } from '@/composables/useStore'
 import { initAuth } from '@/composables/useAuth'
 
 import '@/styles/root.css'
@@ -24,6 +24,21 @@ async function bootstrap() {
   await initAuth()
   await initStore()
   createApp(App).use(router).mount('#app')
+
+  /*
+   * 🔴 挂载之后再补「发现页」的云端数据 —— **故意不 await**。
+   *
+   * 未登录访客的 `active` 适配器是本地那个，读到的 `jt:sites` 是
+   * 第一次访问灌进去的种子快照，而且**永远不会更新**（`sites` 不在
+   * `SEED_ADDITIONS` 里）→ 后台新审核的站点对未登录访客不可见。
+   *
+   * 放在 `mount()` **之后**是关键：未登录访客的 boot 现在是纯本地的，
+   * 阻塞读会给多数访客的挂载 +250ms。这里先让页面用种子渲染出来，
+   * 云端数据到了再覆盖（reactive，发现页会自己更新）。
+   *
+   * 函数内部自己吞掉所有异常，所以这里不需要 `.catch()`。
+   */
+  refreshSitesFromCloud()
 }
 
 bootstrap()
