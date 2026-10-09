@@ -2561,6 +2561,9 @@ export function useCloudStorage() { … }     // 唯一的调用点：useAuth.en
       b23 Agent Lab / b24 PDF24 Tools，`SEED_VERSION` 2→3 让老用户也能拿到。
       详见「「恢复默认」到底该恢复什么」一节。探针 `reset-default.mjs`
       修复前 **25 / 20** → 修复后 **45 / 0**，造红 34 / 11。
+      🔁 **2026-10-09：这个探针已经搬进仓库 `scripts/reset-default.mjs`。**
+      它一度被 `/tmp` 清理掉，后来从**会话记录**里回放恢复
+      （见 `scripts/README.md` 的「东西丢了怎么捞回来」），恢复后复跑 **45 / 0**。
 - [x] **`transferLocalToCloud` 的动态验证**（2026-09-30）
       起因是源码注释里自己写着「只做了静态修正，没有动态验证，别当成已验证」——
       一条**记着「没验过」的改动**，长得却跟已验证的一模一样。

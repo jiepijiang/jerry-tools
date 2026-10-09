@@ -10,6 +10,7 @@
     "check:i18n": "node scripts/check-i18n-parity.mjs; p=$?; node scripts/check-i18n-text.mjs; t=$?; exit $((p + t > 0))",
     "build:nosb": "VITE_SUPABASE_URL= VITE_SUPABASE_ANON_KEY= vite build --outDir dist-nosb --emptyOutDir",
     "serve:dist": "node scripts/serve-static.mjs dist /jerry-tools/ 5200",
+    "probe:reset": "node scripts/reset-default.mjs",
     "probe:perf": "node scripts/perf-audit.mjs",
     "probe:interact": "node scripts/interact-audit.mjs",
     "probe:sites": "node scripts/sites-source.mjs"

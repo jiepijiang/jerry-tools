@@ -14,13 +14,30 @@ i18n-en-check · write-sites-honest · pglite-006 · unit-cloud · empty-vs-firs
 read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loader.mjs
 ```
 
-而且**两条路都走不通**（2026-10-08 核过）：
+### ✅ 但它们后来**全都捞回来了**（2026-10-09）
 
-- **磁盘**：`find` 扫过 `~/`、`/tmp`、`/var/folders`（深度 6），一个副本都没有，也没有 zip 备份
-- **历史对话**：`conversation_search` 试了 4 次（含放宽时间范围），**全部 0 命中**
+当时我核过两条路，都走不通，于是断言「只能重写」：
 
-→ 所以 `reset-default.mjs`（45 条断言 / 8 场景，项目最值钱的那套）
-**只能重写**，不是「搬一下」。那次教训换来的就是这条规矩。
+- **磁盘**：`find` 扫过 `~/`、`/tmp`、`/var/folders`（深度 6），没有副本，也没 zip 备份
+- **历史对话**：`conversation_search` 试了 4 次，全部 0 命中
+
+**那条断言是错的 —— 我漏了第三条路。**
+
+```
+~/.workbuddy-ai/projects/<项目>/<会话id>.jsonl     ← 存着每次 Write / Edit 的完整参数
+```
+
+用 `scripts/recover-from-transcript.mjs` 回放（先 Write 铺底、再逐条 apply Edit），
+**354 个文件**可恢复，丢的那批全在里面。`reset-default.mjs` 已恢复并复跑 **45 / 0**。
+
+### ⚠️ 但这**不**是「所以可以继续放 /tmp」
+
+- 记录**只覆盖 Write / Edit** —— 用 `sed` / 内联 python 改过的部分**不在里面**
+- 记录**会被轮转裁剪** —— 只找到 2 个会话记录；更早的会话真没了
+- 回放**可能失真** —— 某条 Edit 的 `old_string` 找不到时，恢复出来的是**中间态**
+
+所以规矩不变，而且这次有实证：**该进仓库的东西必须进仓库。**
+`recover-from-transcript.mjs` 只是最后一道保险，不是免死金牌。
 
 ---
 
@@ -29,8 +46,8 @@ read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loa
 | 层 | 什么时候跑 | 有哪些 |
 | --- | --- | --- |
 | **`check-*`（静态）** | **CI 每次 push 自动跑** | `check-i18n-parity.mjs` · `check-i18n-text.mjs` |
-| **`probe-*`（端到端）** | **只能手工跑** | `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` |
-| 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` |
+| **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` |
+| 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` · `recover-from-transcript.mjs` |
 
 > ⚠️ 曾经还有一个 `seed-lazy.mjs`，**已删**。
 > 它的断言建立在「云端模式不该请求种子数据」这个前提上 —— 而那个前提
@@ -66,6 +83,7 @@ npm run build:nosb       # → dist-nosb/（本机模式，无 Supabase）
 npm run serve:dist       # 5200，服务 dist/
 node scripts/serve-static.mjs dist-nosb /jerry-tools/ 5201   # 5201，服务 dist-nosb/
 npm run probe:sites      # 两个 base 都打（发现页的数据来源）
+npm run probe:reset      # 「恢复默认」+ 默认配置完整性（8 场景 / 45 条断言）
 ```
 
 ### 写新探针时请遵守
@@ -99,6 +117,33 @@ npm run probe:sites      # 两个 base 都打（发现页的数据来源）
    别的探针（找「数据备份」按钮的那个）就莫名其妙地红，症状指向它自己、根因却在更早那次运行。
 
 7. **`/tmp` 只放一次性的调试脚本**（`_dbg-*.mjs`），用完就丢。有复用价值的立刻搬进来。
+
+---
+
+## 东西丢了怎么捞回来
+
+```bash
+# ① 先列出来（默认只看 /tmp/ 下的 —— 也就是「本来就不该是唯一副本」的那批）
+node scripts/recover-from-transcript.mjs --list
+node scripts/recover-from-transcript.mjs --list --filter jerry-sb
+
+# ② 捞一个 / 全捞
+node scripts/recover-from-transcript.mjs --dump /tmp/jerry-sb/reset-default.mjs ./reset-default.mjs
+node scripts/recover-from-transcript.mjs --dump-all /tmp/_recovered --filter jerry-sb
+```
+
+**原理**：`~/.workbuddy-ai/projects/<项目>/<会话id>.jsonl` 里存着每次
+`Write` / `Edit` 的完整参数。对同一个路径「先 Write 铺底、再逐条 apply Edit」即可还原。
+
+**三条边界，用之前必须知道：**
+
+1. **只覆盖 Write / Edit。** 用 `sed` / 内联 python 改过的文件，那部分**不在记录里**。
+2. **回放可能失真。** 某条 Edit 的 `old_string` 找不到 = 它前面那条已动过同一段。
+   脚本会打 `⚠️ N 条 Edit 对不上，可能是中间态` —— **这种必须跑一遍验证再信**。
+3. **记录会被轮转裁剪。** 更早的会话被清了就真没了。
+
+→ 所以这个脚本是**最后一道保险，不是免死金牌**。
+   捞回来的东西**第一件事是跑一遍**，别直接信。
 
 ---
 
