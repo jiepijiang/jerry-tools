@@ -17,6 +17,9 @@ export const messages = {
     // 定义了但从没被任何组件引用过，是站点改名时留下的死键。
     // 博客部分已重做成知识库看板（独立仓库 jerry-notes），这里跟着改叫知识库。
     'nav.knowledgeBase': '知识库',
+    // 2026-10-12 加：姊妹站 jerry-skills（AI 技能分享）。放「知识库」之后，
+    // 和它一样是外链。⚠️ 中英两条**必须成对加** —— `npm run check:i18n` 会核对键位。
+    'nav.skillSite': '技能站',
 
     'clock.lunar': '农历',
     'clock.today': '今日',
@@ -520,6 +523,7 @@ export const messages = {
     'nav.discover': 'Discover',
     'nav.admin': 'Admin',
     'nav.knowledgeBase': 'Knowledge Base',
+    'nav.skillSite': 'Skill Site',
 
     'clock.lunar': 'Lunar',
     'clock.today': 'Today',

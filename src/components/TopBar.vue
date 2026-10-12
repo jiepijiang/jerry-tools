@@ -85,6 +85,15 @@ const navItems = computed(() => {
       icon: 'BookOpen',
       href: 'https://jiepijiang.github.io/jerry-notes/',
     },
+    // 2026-10-12 加：姊妹站 jerry-skills（AI 技能分享）。
+    // 图标用 `Zap` —— 呼应那边站标本身就是一个闪电（`TopBar.vue` 的 `bolt`），
+    // 同一个站换个地方出现不该换张脸。
+    {
+      name: 'skillSite',
+      label: t('nav.skillSite'),
+      icon: 'Zap',
+      href: 'https://jiepijiang.github.io/jerry-skills/',
+    },
   ]
   if (state.session?.isAdmin) items.push({ name: 'admin', label: t('nav.admin'), icon: 'Shield' })
   return items
