@@ -13,7 +13,11 @@
     "probe:reset": "node scripts/reset-default.mjs",
     "probe:perf": "node scripts/perf-audit.mjs",
     "probe:interact": "node scripts/interact-audit.mjs",
-    "probe:sites": "node scripts/sites-source.mjs"
+    "probe:sites": "node scripts/sites-source.mjs",
+    "probe:pop": "node scripts/probe-engine-pop.mjs",
+    "probe:seed": "node scripts/probe-seed-urls.mjs",
+    "probe:seed-icons": "node scripts/probe-seed-icons.mjs",
+    "probe:seed-render": "node scripts/probe-seed-icons-render.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",

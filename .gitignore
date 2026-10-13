@@ -26,5 +26,8 @@ npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# 探针跑出来的截图（可重新生成，不进仓库）
+scripts/out-*.png
+
 # 本机 AI 工作区（项目记忆等本地状态，不随仓库分发）
 .workbuddy-ai

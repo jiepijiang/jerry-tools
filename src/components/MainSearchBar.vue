@@ -85,7 +85,7 @@ function blurSoon() {
           <AppIcon name="ChevronDown" :size="13" />
         </button>
         <Transition name="pop">
-          <div v-if="engineOpen" class="engine-pop glass">
+          <div v-if="engineOpen" class="engine-pop">
             <button
               v-for="e in searchEngines"
               :key="e.id"
@@ -117,7 +117,7 @@ function blurSoon() {
 
       <!-- 本地匹配下拉 -->
       <Transition name="pop">
-        <div v-if="focused && matches.length" class="match-pop glass">
+        <div v-if="focused && matches.length" class="match-pop">
           <button v-for="b in matches" :key="b.id" class="match-item" @mousedown.prevent="openBookmark(b)">
             <img v-if="faviconOf(b.url, b.icon)" :src="faviconOf(b.url, b.icon)" alt="" class="match-icon" />
             <div class="match-text">
@@ -160,6 +160,24 @@ function blurSoon() {
   padding: 6px;
   position: relative;
   transition: box-shadow 0.25s ease, border-color 0.25s ease;
+  /* ⚠️ 这个 z-index 不是装饰，是**必须的** —— 2026-10-13 修。
+   *
+   * 下面两个下拉（.engine-pop / .match-pop）写的是 z-index: 110 / 120，
+   * 但它们**都在 .bar 里面**，而 .bar 是 .glass → 带 backdrop-filter，
+   * **backdrop-filter 会创建层叠上下文**。于是那两个 z-index 只在 .bar
+   * **内部**有效；在根层叠上下文里 .bar 仍是 z-index:auto（=0），
+   * 而 DOM 更靠后的 .bm-card（也带 backdrop-filter，各自成上下文）排在它后面
+   * → **卡片直接盖住下拉框**。
+   *
+   * 实测（scripts/probe-engine-pop.mjs）：下拉第 5 项 `npm` 那个坐标上，
+   * `elementsFromPoint()` 最上层是 `bm-name`（书签卡片的标题），不是下拉项
+   * —— 最后一项**点不到**。搜索建议下拉（.match-pop）同一个病。
+   *
+   * 修法：把 z-index 提到 .bar 上，让整个搜索栏（含两个下拉）作为一个
+   * 层叠上下文整体压在卡片之上。取 30 —— 高于卡片（auto/0），
+   * 低于顶栏（200）、弹窗（8000）、浮层（8500）。
+   */
+  z-index: 30;
 }
 
 .bar.focused {
@@ -197,7 +215,16 @@ function blurSoon() {
   width: 9px;
 }
 
+/* ⚠️ 刻意**不用** .glass —— 与 BookmarkCard 的 .bm-tooltip 同一条理由：
+   下拉框浮在书签卡片上方，而 .glass 的底色是 --item_bg_color
+   （实测 rgba(255,255,255,0.62)，只有 62% 不透明），底下的卡片标题、
+   分类计数（「24 个网址 · 0 个子分类」）会**透上来和下拉项叠在一起**。
+   改用 --tip_bg_color（0.97，近不透明）+ 自身的模糊兜底。 */
 .engine-pop {
+  backdrop-filter: blur(var(--back_filter));
+  -webkit-backdrop-filter: blur(var(--back_filter));
+  background-color: var(--tip_bg_color);
+  border: 1px solid var(--tip_border_color);
   border-radius: var(--radius);
   box-shadow: 0 14px 34px var(--shadow-hover);
   left: 0;
@@ -267,8 +294,13 @@ function blurSoon() {
   transform: scale(0.94);
 }
 
-/* —— 匹配下拉 —— */
+/* —— 匹配下拉 ——
+   ⚠️ 同样不用 .glass，理由见上面 .engine-pop 的注释。 */
 .match-pop {
+  backdrop-filter: blur(var(--back_filter));
+  -webkit-backdrop-filter: blur(var(--back_filter));
+  background-color: var(--tip_bg_color);
+  border: 1px solid var(--tip_border_color);
   border-radius: var(--radius);
   box-shadow: 0 16px 40px var(--shadow-hover);
   left: 0;

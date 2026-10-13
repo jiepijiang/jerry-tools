@@ -46,7 +46,7 @@ read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loa
 | 层 | 什么时候跑 | 有哪些 |
 | --- | --- | --- |
 | **`check-*`（静态）** | **CI 每次 push 自动跑** | `check-i18n-parity.mjs` · `check-i18n-text.mjs` |
-| **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` |
+| **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` · `probe-engine-pop.mjs` · `probe-seed-urls.mjs` · `probe-seed-icons.mjs` · `probe-seed-icons-render.mjs` |
 | 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` · `recover-from-transcript.mjs` |
 
 > ⚠️ 曾经还有一个 `seed-lazy.mjs`，**已删**。
@@ -84,6 +84,31 @@ npm run serve:dist       # 5200，服务 dist/
 node scripts/serve-static.mjs dist-nosb /jerry-tools/ 5201   # 5201，服务 dist-nosb/
 npm run probe:sites      # 两个 base 都打（发现页的数据来源）
 npm run probe:reset      # 「恢复默认」+ 默认配置完整性（8 场景 / 45 条断言）
+npm run probe:pop        # 搜索引擎下拉框的层叠与不透明（5 条）
+```
+
+### 种子图标的三级探针（2026-10-13）
+
+验「48 条默认书签的图标能不能显示」时，**一级比一级严格**，
+而且**每一级都抓到了上一级漏掉的东西** —— 所以三级都得留着：
+
+| 级 | 脚本 | 量什么 | 漏掉了什么 |
+| --- | --- | --- | --- |
+| ① 可达性 | `probe-seed-urls.mjs` | 站点通不通 + `/apple-touch-icon.png` `/favicon.ico` 存不存在 | 站点把图标放在别的路径（HTML 里 `<link rel=icon>` 声明的那 13 个） |
+| ② 真实路径 | `probe-seed-icons.mjs` | 解析 HTML 的 `<link rel="icon">`，按 apple-touch / svg / 体积打分挑最优 | **HTTP 层的绿全是假绿** —— 见下 |
+| ③ 真渲染 | `probe-seed-icons-render.mjs` | 在真 Chromium 里读 `naturalWidth > 0` | —— |
+
+> 📌 **「HTTP 200 + `image/png`」和「浏览器画得出来」是两件事。**
+> ② 全绿的情况下，③ 一跑 **48 个图标有 7 个加载不出来**：
+> 6 个是沙箱网络到不了（走代理就好），1 个是**站点自己的缺陷** ——
+> 花瓣网的 `/favicon.ico` 返回**结构损坏的 ICO**，HTTP 200 但 Chromium
+> 拒绝解码，**连 `requestfailed` 都不触发**（所以只监听网络事件也抓不到）。
+> **验图片要看 `naturalWidth`，不能看状态码。**
+
+用法（被墙的站点必须带代理，否则那 6 个必红，那是网络不是 URL）：
+
+```bash
+npm run probe:seed-render -- --proxy http://127.0.0.1:7897   # 42 可渲染 / 0 失败
 ```
 
 ### 写新探针时请遵守
