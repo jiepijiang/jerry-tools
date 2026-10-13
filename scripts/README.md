@@ -84,7 +84,7 @@ npm run serve:dist       # 5200，服务 dist/
 node scripts/serve-static.mjs dist-nosb /jerry-tools/ 5201   # 5201，服务 dist-nosb/
 npm run probe:sites      # 两个 base 都打（发现页的数据来源）
 npm run probe:reset      # 「恢复默认」+ 默认配置完整性（8 场景 / 45 条断言）
-npm run probe:pop        # 搜索引擎下拉框的层叠与不透明（5 条）
+npm run probe:pop        # 搜索引擎下拉框：层叠 / 不透明 / 收起时机（11 条）
 ```
 
 ### 种子图标的三级探针（2026-10-13）

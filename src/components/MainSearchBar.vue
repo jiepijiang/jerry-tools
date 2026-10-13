@@ -4,7 +4,7 @@
  * 左侧是搜索引擎选择，中间输入，右侧按钮；下方是常用书签标签。
  * 输入时实时在本地书签里过滤，回车则用选中的搜索引擎跳转。
  */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
 import { frequentBookmarks, recordVisit, state } from '@/composables/useStore'
 import { settings, setSetting } from '@/composables/useSettings'
@@ -24,6 +24,54 @@ const { t } = useI18n()
 const keyword = ref('')
 const engineOpen = ref(false)
 const focused = ref(false)
+
+/* ⚠️ 下拉框要能「点别处就收起」——2026-10-13 补。
+ *
+ * 之前只有 `pickEngine()` 会把 engineOpen 置 false，也就是**只有选中某一项
+ * 才关得掉**：点输入框、点侧栏、点卡片……它都一直挂在那儿。
+ * （旁边那个搜索建议下拉 .match-pop 没这问题 —— 它挂在 `focused` 上，
+ *  输入框一失焦就收，是浏览器给的 blur 顺带做掉的。engineOpen 没有对应机制。）
+ *
+ * 判据不是「点按钮会切换」——那是 `@click` 本来就有的——而是
+ * 「**凡是点在 .engine 之外的 pointerdown，都要收起**」。
+ *
+ * 两个实现细节：
+ *  1. 用 **pointerdown** 而不是 click：按下就收，和原生 <select> 一致，
+ *     不用等一次完整的按下+抬起；也避免「按在别处、松在按钮上」被当成
+ *     一次点击。
+ *  2. 用**捕获阶段**（第三个参数 true）：这样即便中途有元素
+ *     `stopPropagation()`，document 仍然先收到，不会漏收。
+ *     `.engine` 自身（含按钮和下拉项）在判据里被排除，所以点按钮仍是
+ *     `@click` 的切换、点下拉项仍是 `pickEngine()`。
+ */
+const engineWrap = ref(null)
+
+function onDocPointerDown(e) {
+  if (!engineWrap.value?.contains(e.target)) engineOpen.value = false
+}
+
+function onDocKeydown(e) {
+  if (e.key === 'Escape') engineOpen.value = false
+}
+
+/* 只在打开时挂监听、关掉立刻摘 —— 不常驻一个全局 pointerdown。
+   常驻的代价是「页面上每个实例、每次点击都要走一遍处理函数」，
+   而这个下拉绝大多数时间是关着的。 */
+watch(engineOpen, (open) => {
+  if (open) {
+    document.addEventListener('pointerdown', onDocPointerDown, true)
+    document.addEventListener('keydown', onDocKeydown)
+  } else {
+    document.removeEventListener('pointerdown', onDocPointerDown, true)
+    document.removeEventListener('keydown', onDocKeydown)
+  }
+})
+
+/* 组件在下拉开着的时候被卸载（切路由等），监听要跟着走，否则留在 document 上。 */
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
+  document.removeEventListener('keydown', onDocKeydown)
+})
 
 const engine = computed(
   () => searchEngines.find((e) => e.id === settings.searchEngine) || searchEngines[0],
@@ -78,7 +126,7 @@ function blurSoon() {
   <div class="msb">
     <div class="bar glass" :class="{ focused }">
       <!-- 搜索引擎 -->
-      <div class="engine">
+      <div ref="engineWrap" class="engine">
         <button class="engine-btn" @click="engineOpen = !engineOpen">
           <span class="engine-dot" :style="{ background: engine.color }" />
           <span>{{ engine.name }}</span>

@@ -460,15 +460,16 @@ dev / dist 子路径 / 线上均 **329 / 0**。
    照样全绿 —— 差点误判成「D 段的断言是真的」。凡是造红开关，
    一定要确认它作用到了**每一条**相关断言上。
 
-### 搜索栏下拉框：被卡片盖住 + 半透明（2026-10-13）
+### 搜索栏下拉框：被卡片盖住 + 半透明 + 点别处不收起（2026-10-13）
 
-Jerry 给的截图里，搜索框左边的搜索引擎下拉展开后有两个毛病 —— 都不是「不好看」，
+Jerry 给的截图里，搜索框左边的搜索引擎下拉展开后有毛病 —— 都不是「不好看」，
 而是**功能坏了**和**读不了**：
 
 | 症状 | 性质 |
 | --- | --- |
 | 最后一项（`npm`）**被书签卡片盖住，点不到** | 功能坏了 |
 | 下拉背景只有 62% 不透明，底下的分类计数、卡片标题**透上来和下拉项叠字** | 读不了 |
+| **点别处不收起**（只有选中某一项才关得掉） | 功能坏了 |
 
 #### ① 根因：`backdrop-filter` 会**创建层叠上下文**
 
@@ -508,7 +509,46 @@ Jerry 给的截图里，搜索框左边的搜索引擎下拉展开后有两个�
 写了「这里刻意不用 `.glass`：提示框浮在分类标题上方，半透明底会把底下的字透上来」。
 同一个道理，同一个 token。
 
-#### 守卫：`scripts/probe-engine-pop.mjs`（5 条断言）
+#### ③ 点别处不收起：`engineOpen` 少了「谁来关它」
+
+改之前 `engineOpen` **只有 `pickEngine()` 会置 false** —— 也就是
+**只有选中某一项才关得掉**；点输入框、点侧栏、点卡片，它都一直挂在那儿。
+
+> 旁边那个搜索建议下拉（`.match-pop`）**没这个毛病**，但那不是「做对了」，
+> 是**蹭到了浏览器的默认行为** —— 它挂在 `focused` 上，输入框一失焦就收。
+> `engineOpen` 没有任何等价机制，所以漏了。
+
+修法是给 `.engine` 挂一个「打开时才生效」的 document 监听：
+
+```js
+const engineWrap = ref(null)
+
+function onDocPointerDown(e) {
+  if (!engineWrap.value?.contains(e.target)) engineOpen.value = false
+}
+
+watch(engineOpen, (open) => {
+  if (open) {
+    document.addEventListener('pointerdown', onDocPointerDown, true)
+    document.addEventListener('keydown', onDocKeydown)   // Esc
+  } else {
+    document.removeEventListener('pointerdown', onDocPointerDown, true)
+    document.removeEventListener('keydown', onDocKeydown)
+  }
+})
+```
+
+三个实现细节都有理由：
+
+- **用 `pointerdown` 而不是 `click`** —— 按下就收，和原生 `<select>` 一致；
+  也避免「按在别处、松在按钮上」被当成一次点击。
+- **用捕获阶段**（第三个参数 `true`）—— 即便中途有元素 `stopPropagation()`，
+  document 仍然先收到，不会漏收。`.engine` 自身（含按钮和下拉项）在判据里被
+  排除，所以点按钮仍是 `@click` 的切换、点下拉项仍是 `pickEngine()`。
+- **只在打开时挂、关掉立刻摘** —— 不常驻一个全局 `pointerdown`。
+  `onBeforeUnmount` 里也摘一次，防止组件在下拉开着时被卸载（切路由等）。
+
+#### 守卫：`scripts/probe-engine-pop.mjs`（11 条断言）
 
 判据钉死在三件事上：
 
@@ -516,14 +556,28 @@ Jerry 给的截图里，搜索框左边的搜索引擎下拉展开后有两个�
 - **每一项的中心点** `elementsFromPoint()` 返回的最上层元素必须是它自己
   （或其子元素）—— 直接量「有没有被盖住」，而不是看 `z-index` 计算值；
 - 最后一项 `npm` **真的点得到**；
-- 背景 `alpha ≥ 0.9`。
+- 背景 `alpha ≥ 0.9`；
+- **凡点在 `.engine` 之外的 `pointerdown` 都要收起**（输入框 / 页面别处 / Esc），
+  同时**点按钮、点下拉项该有的行为不能被改坏**。
 
-实测 **5 / 0**。造红两次，都精确复现：
+实测 **11 / 0**。造红三次，都精确复现：
 
 | 造红动作 | 结果 |
 | --- | --- |
 | 去掉 `.bar { z-index: 30 }` | **2 条红**，`npm ← 被 bm-name 盖住` |
 | 背景换回 `--item_bg_color` | **1 条红**，`alpha=0.62` |
+| 摘掉「点别处收起」的监听 | **2 条红**（①②），③④⑤ 照常绿 |
+
+> ⚠️ **写这几条交互断言时我自己先踩了一次：用固定 `sleep(280)` 赌时序。**
+> 结果 ①③⑤ 三条**假红**，看着像「点别处不收起」，其实收起了。
+> 真实时序（用 `MutationObserver` 量的）：`pointerdown` 到达后 **≈342ms**
+> 元素才离开 DOM，而不是 `.pop-leave-active` 声明的 160ms ——
+> 因为 `src/styles/base.css` 有一条全局 `* { transition: background-color 0.2s ease }`，
+> Vue 的 `<Transition>` 把它**也算进了 leave 时长**。
+> （视觉上 160ms 就淡没了，DOM 多留一会儿而已，**不影响体验**，但写死秒数一定会翻车。）
+>
+> 📌 **「多久之后应该好了」不要写死秒数，等状态本身** ——
+> 这里改成 `waitForSelector('.engine-pop', { state: 'detached' })`。
 
 ### 其它
 
