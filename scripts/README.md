@@ -46,7 +46,7 @@ read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loa
 | 层 | 什么时候跑 | 有哪些 |
 | --- | --- | --- |
 | **`check-*`（静态）** | **CI 每次 push 自动跑** | `check-i18n-parity.mjs` · `check-i18n-text.mjs` |
-| **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` · `probe-engine-pop.mjs` · `probe-seed-urls.mjs` · `probe-seed-icons.mjs` · `probe-seed-icons-render.mjs` |
+| **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` · `probe-engine-pop.mjs` · `probe-footer.mjs` · `probe-seed-urls.mjs` · `probe-seed-icons.mjs` · `probe-seed-icons-render.mjs` |
 | 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` · `recover-from-transcript.mjs` |
 
 > ⚠️ 曾经还有一个 `seed-lazy.mjs`，**已删**。
@@ -85,6 +85,7 @@ node scripts/serve-static.mjs dist-nosb /jerry-tools/ 5201   # 5201，服务 dis
 npm run probe:sites      # 两个 base 都打（发现页的数据来源）
 npm run probe:reset      # 「恢复默认」+ 默认配置完整性（8 场景 / 45 条断言）
 npm run probe:pop        # 搜索引擎下拉框：层叠 / 不透明 / 收起时机（11 条）
+npm run probe:footer     # 页脚：互链矩阵 + 可读性 + 英文不混中文（19 条）
 ```
 
 ### 种子图标的三级探针（2026-10-13）

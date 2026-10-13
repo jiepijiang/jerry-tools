@@ -15,6 +15,7 @@
     "probe:interact": "node scripts/interact-audit.mjs",
     "probe:sites": "node scripts/sites-source.mjs",
     "probe:pop": "node scripts/probe-engine-pop.mjs",
+    "probe:footer": "node scripts/probe-footer.mjs",
     "probe:seed": "node scripts/probe-seed-urls.mjs",
     "probe:seed-icons": "node scripts/probe-seed-icons.mjs",
     "probe:seed-render": "node scripts/probe-seed-icons-render.mjs"

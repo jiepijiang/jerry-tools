@@ -13,6 +13,8 @@ import { useClock } from '@/composables/useClock'
 import { useI18n } from '@/composables/useI18n'
 import { cycleThemeMode, isDark, setSetting, settings } from '@/composables/useSettings'
 import { accentColors } from '@/data/themeColors'
+// 姊妹站地址与页脚共用一份，别在这里再写一遍字面量（见 data/site.js）
+import { SITES } from '@/data/site'
 import { cloudAuthEnabled, isLoggedIn } from '@/composables/useAuth'
 import { realtimeStatus } from '@/composables/useRealtime'
 import { state } from '@/composables/useStore'
@@ -83,7 +85,7 @@ const navItems = computed(() => {
       name: 'knowledgeBase',
       label: t('nav.knowledgeBase'),
       icon: 'BookOpen',
-      href: 'https://jiepijiang.github.io/jerry-notes/',
+      href: SITES.notes,
     },
     // 2026-10-12 加：姊妹站 jerry-skills（AI 技能分享）。
     // 图标用 `Zap` —— 呼应那边站标本身就是一个闪电（`TopBar.vue` 的 `bolt`），
@@ -92,7 +94,7 @@ const navItems = computed(() => {
       name: 'skillSite',
       label: t('nav.skillSite'),
       icon: 'Zap',
-      href: 'https://jiepijiang.github.io/jerry-skills/',
+      href: SITES.skills,
     },
   ]
   if (state.session?.isAdmin) items.push({ name: 'admin', label: t('nav.admin'), icon: 'Shield' })

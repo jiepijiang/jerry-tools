@@ -510,9 +510,12 @@ export const messages = {
     'toast.synced': '数据已自动同步',
     'toast.syncFail': '同步失败',
 
-    'footer.builtWith': 'Vue 3 + Vite',
-    'footer.reference': '功能参考',
-    'footer.styleRef': '视觉参考',
+    // 页脚（2026-10-13 改成与技能站同一套样式）。
+    // 旧的 footer.builtWith / footer.reference / footer.styleRef 已随这次改版删除
+    // —— 「功能参考 dh.huhage.fun / 视觉参考 Jerry Site」现在只在 README 的
+    // 「参考来源与声明」里保留，页脚不再挂这两个出处。
+    'footer.copyright': 'Jerry © 2026',
+    'footer.mainSite': '主站',
   },
 
   en: {
@@ -1005,9 +1008,8 @@ export const messages = {
     'toast.synced': 'Data synced',
     'toast.syncFail': 'Sync failed',
 
-    'footer.builtWith': 'Vue 3 + Vite',
-    'footer.reference': 'Features reference',
-    'footer.styleRef': 'Style reference',
+    'footer.copyright': 'Jerry © 2026',
+    'footer.mainSite': 'Main Site',
   },
 }
 
