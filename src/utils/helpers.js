@@ -138,7 +138,8 @@ export function isUsableIcon(src) {
 
 /**
  * 站点图标地址。
- * 优先级：数据里写死的自定义图标 → 站点自己的 `/favicon.ico` → 由调用方渲染首字母兜底。
+ * 优先级：`custom` 参数（用户填的自定义图标 / **解析到的真图标地址**）→
+ *        站点 origin 的 `/favicon.ico` → 由调用方渲染首字母兜底。
  *
  * 特意**不用** Google 的 s2 favicon 服务：它在国内不可达，会让整页图标集体挂掉，
  * 而且批量请求还会被限流。让每个站点自己提供图标，既没有第三方依赖也不会被限。
@@ -206,13 +207,163 @@ export function resolveIconMode(item) {
  *      icon 非空但地址不合格     → custom  → faviconOf 内部回落到站点图标 ← 同老行为
  *
  *    唯一的新行为是 `initial`：直接返回 `''`，`<img>` 压根不渲染，只剩字母块。
+ *
+ * ⚠️⚠️ 2026-10-14（第二轮）起，**favicon 模式下 `item.icon` 的语义变了**：
+ *    它不再是「用户填的自定义地址」，而是「**页面 HTML 里解析到的真图标地址**」的缓存
+ *    （由 `siteIcon.js` 的 `resolveSiteIcon()` 解析、弹窗保存时写进去）。
+ *    所以 favicon 与 custom 两条分支现在**走同一条路**：
+ *
+ *      favicon → item.icon 有值（解析成功）→ 用它          ← 这是「抓真图标」的修复
+ *      favicon → item.icon 为空（没解析到）→ origin/favicon.ico  ← 老行为，仍在
+ *
+ *    对存量数据**仍然逐条等价** —— 老数据里 favicon 模式的 `icon` 本来就是空的。
  */
 export function iconSrcFor(item) {
   if (!item) return ''
   const mode = resolveIconMode(item)
   if (mode === 'initial') return ''
-  if (mode === 'favicon') return faviconOf(item.url, '')
   return faviconOf(item.url, item.icon)
+}
+
+/* =========================================================================
+   从页面 HTML 里挑出「站点自己声明的图标」
+   ========================================================================= */
+
+/**
+ * `rel` 里出现这些词才算图标，值 = 优先顺序（小的优先）。
+ *
+ *   icon                          浏览器地址栏/标签页用的那个，首选
+ *   apple-touch-icon(-precomposed) 通常是 180×180 的 PNG，质量更好
+ *   fluid-icon                    GitHub 在用的高分辨率图标
+ *
+ * ⚠️ 特意**不收** `mask-icon` —— 那是 Safari 固定标签页用的**单色**图形，
+ *    拿来当普通图标会得到一个纯黑/纯白的色块。
+ *
+ * ⚠️ `rel="shortcut icon"` 与 `rel="alternate icon"` 都落在 `icon` 这一档：
+ *    前者是老写法（`shortcut` 只是个历史包袱），后者是 GitHub 给 .ico 兜底用的，
+ *    两者浏览器都认。
+ */
+const ICON_REL_PRIORITY = {
+  icon: 0,
+  'apple-touch-icon': 1,
+  'apple-touch-icon-precomposed': 1,
+  'fluid-icon': 2,
+}
+
+/**
+ * 注释、`<script>`、`<style>` 里的内容一律先删掉。
+ *
+ * ⚠️ 不删的话会踩两类假阳性：被注释掉的旧 `<link rel="icon">`
+ *    （站点改版后经常留着），以及 JS 字符串里写着的 HTML 片段。
+ *    两者都会让我们拿到一个**站点其实已经不用了**的地址。
+ */
+const HTML_NOISE_RE = /<!--[\s\S]*?-->|<script\b[\s\S]*?<\/script\s*>|<style\b[\s\S]*?<\/style\s*>/gi
+
+/** 逐个 `<link …>` 标签。属性值里带 `>` 的（实际不存在）会截断，不影响结果。 */
+const LINK_TAG_RE = /<link\b[^>]*>/gi
+
+/** HTML 属性：双引号 / 单引号 / 无引号三种写法都认。 */
+const ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g
+
+/** 把一个 `<link …>` 标签的属性读成小写键的 map（同名取第一个，同 HTML 规则）。 */
+function parseLinkAttrs(tag) {
+  const out = {}
+  ATTR_RE.lastIndex = 0
+  let m
+  while ((m = ATTR_RE.exec(tag))) {
+    const name = m[1].toLowerCase()
+    if (name in out) continue
+    out[name] = m[2] ?? m[3] ?? m[4] ?? ''
+  }
+  return out
+}
+
+/** `sizes="180x180"` → 180。`sizes="any"`（矢量）当无穷大。取不到返回 0。 */
+function sizeOf(attrs) {
+  const s = String(attrs.sizes || '')
+  if (!s) return 0
+  if (/any/i.test(s)) return 1024
+  let best = 0
+  for (const m of s.matchAll(/(\d+)\s*[xX]\s*(\d+)/g)) {
+    // 非正方形的取短边 —— 短边才是「放得下」的那个尺寸
+    best = Math.max(best, Math.min(Number(m[1]), Number(m[2])))
+  }
+  return best
+}
+
+/**
+ * 从一段 HTML 里挑出**站点自己声明的图标地址**（绝对地址）。
+ * 挑不出来返回 `''` —— 由调用方决定怎么兜底（本项目是回落到 `/favicon.ico`）。
+ *
+ * 为什么需要它：`faviconOf()` 猜的是 `<origin>/favicon.ico`，而
+ *
+ *   · **GitHub Pages 项目站**（`user.github.io/repo/`）的真图标写在
+ *     `<link rel="icon" href="/repo/static/img/favicon.jpg">` 里，
+ *     它的 `/favicon.ico` 一律 404 —— 于是猜出来的地址会落到**域名根站点**，
+ *     拿回一张**别人家的图**（实测：四站书签全都显示成了用户主页仓库的 Vue logo）。
+ *   · 现在的站点大多也把图标放在带哈希的路径下（`/assets/icon-a1b2c3.svg`），
+ *     根本没有 `/favicon.ico` 这个约定。
+ *
+ * 排序规则（和浏览器一致）：先按 `rel` 档位，再按 `sizes` 从大到小，最后按文档顺序。
+ *
+ * ⚠️ 纯函数、零依赖 —— 它必须能直接被 `scripts/probe-icon-mode.mjs` import，
+ *    而那个脚本**要进 CI**（`npm ci` 之前就跑），不能碰浏览器 API 或 `@/` 别名。
+ *
+ * @param {string} html    页面 HTML（不需要完整，含 `<head>` 即可）
+ * @param {string} baseUrl 解析相对地址用的基准，**应该是最终地址**（跟完重定向后的）
+ */
+export function extractIconHref(html, baseUrl) {
+  let base = ''
+  try {
+    base = new URL(String(baseUrl || '')).href
+  } catch {
+    return ''
+  }
+  const src = String(html || '').replace(HTML_NOISE_RE, '')
+  if (!src) return ''
+
+  const found = []
+  LINK_TAG_RE.lastIndex = 0
+  let tag
+  let order = 0
+  while ((tag = LINK_TAG_RE.exec(src))) {
+    const attrs = parseLinkAttrs(tag[0])
+    const rel = String(attrs.rel || '').toLowerCase()
+    if (!rel) continue
+
+    let prio = -1
+    for (const token of rel.split(/\s+/)) {
+      const p = ICON_REL_PRIORITY[token]
+      if (p != null && (prio < 0 || p < prio)) prio = p
+    }
+    if (prio < 0) continue
+
+    const href = String(attrs.href || '').trim()
+    if (!href) continue
+    // 内联图片：地址本身可能是几十 KB 的 base64，写进 `icon` 字段纯属自残
+    if (/^data:/i.test(href)) continue
+
+    let abs
+    try {
+      abs = new URL(href, base).href
+    } catch {
+      continue
+    }
+    if (!/^https?:/i.test(abs)) continue
+    found.push({ abs, prio, size: sizeOf(attrs), order: order++ })
+  }
+  if (!found.length) return ''
+
+  const better = (a, b) =>
+    a.prio !== b.prio ? a.prio - b.prio : a.size !== b.size ? b.size - a.size : a.order - b.order
+
+  // 同一个地址可能被声明多次（比如同时写了 shortcut icon 和 icon），按最优的那条算
+  const best = new Map()
+  for (const f of found) {
+    const cur = best.get(f.abs)
+    if (!cur || better(f, cur) < 0) best.set(f.abs, f)
+  }
+  return [...best.values()].sort(better)[0].abs
 }
 
 /**

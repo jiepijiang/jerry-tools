@@ -22,9 +22,31 @@
  * 这些正是最容易在重构里被改掉行为的那批 —— 自己编的语料想不到它们。
  *
  * 用法：node scripts/probe-icon-mode.mjs   （退出码 1 = 有不符合预期的）
+ *
+ * ── 第二轮（2026-10-14）：favicon 模式改成「读页面 HTML」────────────────
+ *
+ * 起因：填 `https://jiepijiang.github.io/jerry-site/` 抓到的是 **Vue 的 logo**。
+ * 根因是 `faviconOf()` 取 `origin`、丢掉路径 —— GitHub Pages **项目站**
+ * （`user.github.io/repo/`）的 `/favicon.ico` 一律 404，于是落到了
+ * **域名根**的图标（用户主页仓库的 Vue logo）。四站全是项目站，全中招。
+ *
+ * 改法：`resolveSiteIcon()` 去读页面 `<head>` 里的 `<link rel="icon">`，
+ * 结果**存进 `icon` 字段当缓存**。于是本脚本多了两处：
+ *
+ *   · 【4】从「favicon 必须忽略 icon 字段」改成
+ *          「icon 有值就用它（4b）/ 为空才回落（4a）/ 坏地址仍被挡（4c）」；
+ *   · 【9】`extractIconHref()` 的纯函数用例 —— 解析器零依赖，
+ *          所以能放进这个**进 CI**的脚本（跑在 `npm ci` 之前）。
  */
 
-import { faviconOf, iconSrcFor, resolveIconMode, isUsableIcon, ICON_MODES } from '../src/utils/helpers.js'
+import {
+  ICON_MODES,
+  extractIconHref,
+  faviconOf,
+  iconSrcFor,
+  isUsableIcon,
+  resolveIconMode,
+} from '../src/utils/helpers.js'
 import { seedBookmarks } from '../src/data/seed.js'
 import { seedSites } from '../src/data/seed-discover.js'
 
@@ -115,14 +137,41 @@ const initialBad = initialItems.filter((i) => iconSrcFor(i) !== '')
 check('【3】initial 一律返回空串（不受 url / icon 影响）', initialBad.length === 0, JSON.stringify(initialBad.map((i) => iconSrcFor(i))))
 
 /* ------------------------------------------------------------------ */
-/* 【4】favicon：必须忽略 icon 字段，只给站点自己的 /favicon.ico        */
+/* 【4】favicon：`icon` 是「解析到的真图标地址」的缓存                   */
 /* ------------------------------------------------------------------ */
 
-const favItem = { url: 'https://github.com/foo/bar', icon: 'https://evil.example/x.png', iconMode: 'favicon' }
+/*
+ * ⚠️ 2026-10-14（第二轮）语义变了，这里的三条一起钉住它。
+ *
+ * 老断言是「favicon 必须**忽略** icon 字段」—— 那是在 `icon` 只代表
+ * 「用户填的自定义地址」的年代写的。现在 favicon 模式下 `icon` 存的是
+ * `resolveSiteIcon()` 从页面 HTML 里解析出来的**真图标地址**，
+ * 所以它**必须被用上**，否则这次修复等于没做。
+ */
+
+// 4a 存量数据 / 解析失败 → 回落 origin 的 /favicon.ico（老行为，不能变）
+const favEmpty = { url: 'https://github.com/foo/bar', icon: '', iconMode: 'favicon' }
 check(
-  '【4】favicon 忽略 icon 字段，取站点 origin 的 /favicon.ico',
-  iconSrcFor(favItem) === 'https://github.com/favicon.ico',
-  iconSrcFor(favItem),
+  '【4a】favicon + icon 为空 → 回落站点 origin 的 /favicon.ico（老行为）',
+  iconSrcFor(favEmpty) === 'https://github.com/favicon.ico',
+  iconSrcFor(favEmpty),
+)
+
+// 4b 解析到了真图标 → 用它。**这一条就是「填主站链接抓到 Vue 图标」那个 bug 的判据**
+const REAL_ICON = 'https://jiepijiang.github.io/jerry-site/static/img/favicon.jpg'
+const favReal = { url: 'https://jiepijiang.github.io/jerry-site/', icon: REAL_ICON, iconMode: 'favicon' }
+check(
+  '【4b】favicon + icon 有值 → 用解析到的真图标（不再去猜 /favicon.ico）',
+  iconSrcFor(favReal) === REAL_ICON,
+  iconSrcFor(favReal),
+)
+
+// 4c 缓存里躺的是坏地址 → 守卫仍然把它挡掉。这条证明 4b 不是「什么都放行」
+const favBad = { url: 'https://a.com', icon: 'https://icons.duckduckgo.com/ip3/a.com.ico', iconMode: 'favicon' }
+check(
+  '【4c】favicon + 缓存地址不合格（第三方服务）→ 回落到 /favicon.ico（守卫仍在）',
+  iconSrcFor(favBad) === 'https://a.com/favicon.ico',
+  iconSrcFor(favBad),
 )
 
 /* ------------------------------------------------------------------ */
@@ -173,6 +222,87 @@ const sitesWithIcon = seedSites.filter((s) => isUsableIcon(s.icon)).length
 console.log(`\n  · seedBookmarks：${seedWithIcon} 条有 icon / ${seedEmpty} 条留空（留空的会显示首字母块）`)
 console.log(`  · seedSites：${sitesWithIcon} / ${seedSites.length} 条的 icon 可用（其余是坏地址或空，回落到 /favicon.ico）`)
 check('【8】语料非空（种子数据真的读到了）', seedBookmarks.length > 0 && seedSites.length > 0)
+
+/* ------------------------------------------------------------------ */
+/* 【9】extractIconHref —— 从页面 HTML 里挑真图标                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 这一组是 2026-10-14 第二轮加的：favicon 模式从「猜 /favicon.ico」改成
+ * 「读页面 HTML」。解析器是纯函数，所以能放在**进 CI 的**这个脚本里。
+ *
+ * ⚠️ 每条都要有**判别力** —— 光测「能挑出来」不够，
+ *    还得测「不该挑的挑不出来」（注释里的、mask-icon、data:）。
+ */
+
+/** 主站用的基准：GitHub Pages **项目站**，路径里有 /jerry-site/。 */
+const BASE = 'https://jiepijiang.github.io/jerry-site/'
+
+const PARSER_CASES = [
+  // [名字, HTML, 期望]
+  [
+    '主站真图标（绝对路径带仓库前缀）',
+    '<link rel="icon" href="/jerry-site/static/img/favicon.jpg" type="image/jpeg" />',
+    'https://jiepijiang.github.io/jerry-site/static/img/favicon.jpg',
+  ],
+  // ⚠️ 这条最容易写错：`/a.png` 是**绝对路径**，要从**域名根**解析，
+  //    不是从 base 的 /jerry-site/ 解析。写成后者会把 /jerry-site/a.png 当成对的。
+  ['绝对路径从域名根解析', '<link href="/a.png" rel="icon">', 'https://jiepijiang.github.io/a.png'],
+  ['相对路径按 base 的目录解析', '<link rel="icon" href="favicon.png">', 'https://jiepijiang.github.io/jerry-site/favicon.png'],
+  ['协议相对地址', '<link rel="icon" href="//cdn.x.com/i.png">', 'https://cdn.x.com/i.png'],
+  ['shortcut icon（老写法）', '<link rel="shortcut icon" href="/s.ico">', 'https://jiepijiang.github.io/s.ico'],
+  ['alternate icon（GitHub 的 .ico 兜底）', '<link rel="alternate icon" href="/f.ico">', 'https://jiepijiang.github.io/f.ico'],
+  ['单引号属性', "<link rel='icon' href='/q.png'>", 'https://jiepijiang.github.io/q.png'],
+  ['无引号属性', '<link rel=icon href=/u.png>', 'https://jiepijiang.github.io/u.png'],
+  ['属性顺序颠倒（href 在前）', '<link href="/r.png" rel="icon">', 'https://jiepijiang.github.io/r.png'],
+  ['注释掉的旧图标要忽略', '<!-- <link rel="icon" href="/old.ico"> --><link rel="icon" href="/new.png">', 'https://jiepijiang.github.io/new.png'],
+  [
+    'script 里的字符串要忽略',
+    '<script>const t = "<link rel=\\"icon\\" href=/fake.png>";</script><link rel="icon" href="/real.png">',
+    'https://jiepijiang.github.io/real.png',
+  ],
+  ['mask-icon 不要（单色，当图标会变黑块）', '<link rel="mask-icon" href="/m.svg" color="#000"><link rel="icon" href="/i.png">', 'https://jiepijiang.github.io/i.png'],
+  ['只有 apple-touch-icon 时用它兜底', '<link rel="apple-touch-icon" href="/a.png" sizes="180x180">', 'https://jiepijiang.github.io/a.png'],
+  ['icon 档位优先于 apple-touch-icon', '<link rel="apple-touch-icon" href="/a.png"><link rel="icon" href="/i.png">', 'https://jiepijiang.github.io/i.png'],
+  ['同档位取 sizes 大的', '<link rel="icon" href="/s.png" sizes="16x16"><link rel="icon" href="/l.png" sizes="32x32">', 'https://jiepijiang.github.io/l.png'],
+  ['sizes=any（矢量）当最大', '<link rel="icon" href="/v.png" sizes="16x16"><link rel="icon" href="/any.svg" sizes="any">', 'https://jiepijiang.github.io/any.svg'],
+  ['data: 图标要跳过（塞进 icon 字段会撑爆数据）', '<link rel="icon" href="data:image/png;base64,AAAA">', ''],
+  ['没有任何声明', '<html><head><title>x</title></head></html>', ''],
+  ['href 是空串', '<link rel="icon" href="">', ''],
+  ['baseUrl 解析不了', '<link rel="icon" href="/i.png">', ''],
+]
+
+let parserBad = 0
+const parserFails = []
+for (const [name, html, want] of PARSER_CASES) {
+  const base = name === 'baseUrl 解析不了' ? 'not a url' : BASE
+  const got = extractIconHref(html, base)
+  if (got !== want) {
+    parserBad++
+    parserFails.push(`${name}：得到 ${JSON.stringify(got)}，期望 ${JSON.stringify(want)}`)
+  }
+}
+check(`【9a】extractIconHref 的 ${PARSER_CASES.length} 个用例`, parserBad === 0, parserFails.join('\n     '))
+
+// 【9b】判别力自检：把解析器的排序反过来（apple 优先于 icon）应该至少红一条 ——
+//       证明上面那组不是「怎么写都能过」。
+const DISCRIMINATION_HTML =
+  '<link rel="apple-touch-icon" href="/a.png"><link rel="icon" href="/i.png">'
+check(
+  '【9b】判别力：icon / apple-touch-icon 同时存在时，结果确实是 icon 那一档',
+  extractIconHref(DISCRIMINATION_HTML, BASE) === 'https://jiepijiang.github.io/i.png',
+  extractIconHref(DISCRIMINATION_HTML, BASE),
+)
+
+// 【9c】真实页面语料：四站的 index.html 里那段 `<link rel="icon">` 长什么样，
+//       解析出来的必须是**带仓库前缀**的地址（也就是这次修复的核心）。
+check(
+  '【9c】主站真图标解析出来带 /jerry-site/ 前缀（不是域名根的 /favicon.ico）',
+  extractIconHref(
+    '<link rel="icon" href="/jerry-site/static/img/favicon.jpg" type="image/jpeg" />',
+    'https://jiepijiang.github.io/jerry-site/',
+  ).includes('/jerry-site/'),
+)
 
 /* ------------------------------------------------------------------ */
 

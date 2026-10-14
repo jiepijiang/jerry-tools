@@ -11,7 +11,7 @@
  * 现在上面有个三选一（见 `helpers.js` 的 `ICON_MODES`）：
  *
  *   initial  只用「名称首字母 + 渐变底」
- *   favicon  自动抓站点自己的 `/favicon.ico`（**抓没抓到会当场显示出来**）
+ *   favicon  自动抓站点自己的图标（**抓没抓到会当场显示出来**）
  *   custom   上传一张图，或直接填图标地址
  *
  * ⚠️ 上传走 `uploadImage()`（`@/data/iconStorage`）：登录状态下会把图缩到
@@ -21,6 +21,24 @@
  *
  * ⚠️ 保存时非 custom 一律把 `icon` 清空 —— 不然「切回首字母」之后，
  *    那个旧的自定义地址还躺在数据里，下次误切到 custom 会突然冒出来。
+ *    **例外：favicon 模式**，那时 `icon` 存的是解析到的真图标地址（见下）。
+ *
+ * ## 第二轮（2026-10-14）：favicon 模式改为**读页面 HTML**，不再猜 /favicon.ico
+ *
+ * 起因：填 `https://jiepijiang.github.io/jerry-site/` 抓到的是 **Vue 的 logo**。
+ * 因为 `faviconOf()` 取的是 `origin`（丢掉路径），于是去抓
+ * `jiepijiang.github.io/favicon.ico` —— 那是**用户主页仓库**的图标，
+ * 而 `jerry-site/favicon.ico` 是 404。四站全是 GitHub Pages 项目站，
+ * 全都踩同一个坑（真图标写在 `<link rel="icon" href="/jerry-site/…">` 里）。
+ *
+ * 现在 favicon 模式的做法与浏览器一致：`resolveSiteIcon()` 去读页面的 `<head>`，
+ * 取出站点自己声明的图标地址，**存进 `icon` 字段当缓存**。
+ * 读不到（站点没声明 / 跨域读不了 / 超时）才回落到 `/favicon.ico`。
+ *
+ * ⚠️ 这**改变了 `icon` 字段在 favicon 模式下的语义** ——
+ *    它不再是「用户填的」，而是「解析结果的缓存」。渲染层
+ *    （`iconSrcFor`）相应地把 favicon 和 custom 合并成了同一条路。
+ *    对存量数据仍然逐条等价（老数据 favicon 模式的 `icon` 本来就是空的）。
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -30,7 +48,8 @@ import { createBookmark, flatCategories, isDuplicateUrl, updateBookmark } from '
 import { useI18n } from '@/composables/useI18n'
 import { toast } from '@/composables/useToast'
 import { uploadImage } from '@/data/iconStorage'
-import { faviconOf, isUsableIcon, isValidUrl, resolveIconMode } from '@/utils/helpers'
+import { resolveSiteIcon } from '@/data/siteIcon'
+import { debounce, faviconOf, isUsableIcon, isValidUrl, resolveIconMode } from '@/utils/helpers'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -63,12 +82,80 @@ const saving = ref(false)
 const iconMode = ref(DEFAULT_ICON_MODE)
 /** idle | loading | ok | fail —— 只在 favicon 模式下有意义 */
 const faviconState = ref('idle')
+/** favicon 模式下解析到的「站点自己声明的图标地址」；'' = 没解析到 */
+const resolvedIcon = ref('')
+/** 上面那个结果对应的网址 —— 网址改了、结果还是旧的时不能拿来用 */
+const resolvedFor = ref('')
+/** idle | loading —— 「正在读页面 HTML」这个阶段（区别于 `<img>` 自身的加载） */
+const resolveState = ref('idle')
+/** 只认最后一次请求的结果：快速改网址时，先发的请求可能后回来 */
+let resolveSeq = 0
 const fileInput = ref(null)
 const nameEl = ref(null)
 const urlEl = ref(null)
 
 const isEdit = computed(() => !!props.bookmark)
 const title = computed(() => (isEdit.value ? t('bookmark.editTitle') : t('bookmark.addTitle')))
+
+/**
+ * 当前网址对应的「解析到的真图标」。网址变了就自动作废。
+ *
+ * ⚠️ 必须比对 `resolvedFor`，不能只看 `resolvedIcon` 有没有值 ——
+ *    Vue 的 watch 回调是**异步**（microtask）刷新的，从「改了网址」到
+ *    「清掉旧结果」之间有一个窗口期，那期间 `resolvedIcon` 是**上一个站点的图标**。
+ *    直接拿它去保存，就会把 A 站的图标写进 B 站的书签里。
+ */
+const currentIcon = computed(() =>
+  resolvedFor.value === form.value.url.trim() ? resolvedIcon.value : '',
+)
+
+/**
+ * 去读页面 HTML，拿站点声明的图标地址。返回结果（`''` = 没解析到）。
+ *
+ * ⚠️ 有竞态：用户连续改网址时，**先发的请求可能后回来**，
+ *    把新网址的结果覆盖成旧的。所以用 `resolveSeq` 只认最后一次。
+ *    返回的仍是本次请求自己的结果 —— 保存路径要用它，不能读 ref。
+ */
+async function runResolve() {
+  const url = form.value.url.trim()
+  const seq = ++resolveSeq
+  if (!isValidUrl(url)) {
+    resolvedIcon.value = ''
+    resolvedFor.value = ''
+    resolveState.value = 'idle'
+    return ''
+  }
+  // 这个网址已经解析过了就别再报「获取中」—— 重新解析会命中缓存、瞬间返回，
+  // 但状态字会闪一下。只在「第一次见到这个网址」时才进 loading。
+  if (resolvedFor.value !== url) resolveState.value = 'loading'
+  const href = await resolveSiteIcon(url)
+  if (seq === resolveSeq) {
+    resolvedIcon.value = href
+    resolvedFor.value = url
+    resolveState.value = 'idle'
+  }
+  return href
+}
+
+/** 打字时别每个字符都发一次请求。`resolveSiteIcon` 自己有缓存，这里只是省往返。 */
+const runResolveDebounced = debounce(runResolve, 450)
+
+/** 网址变了：立刻作废旧结果，再（防抖后）重新解析。 */
+watch(
+  () => form.value.url,
+  () => {
+    if (resolvedFor.value && resolvedFor.value !== form.value.url.trim()) {
+      resolvedIcon.value = ''
+      resolvedFor.value = ''
+    }
+    if (iconMode.value === 'favicon') runResolveDebounced()
+  },
+)
+
+/** 切到「网站图标」时也解析一次 —— 可能之前在别的来源上待着。 */
+watch(iconMode, (mode) => {
+  if (mode === 'favicon') runResolveDebounced()
+})
 
 /**
  * 预览框里显示的那张图。
@@ -87,7 +174,10 @@ const title = computed(() => (isEdit.value ? t('bookmark.editTitle') : t('bookma
 const iconPreview = computed(() => {
   if (iconMode.value === 'initial') return ''
   if (iconMode.value === 'favicon') {
-    return form.value.url.trim() ? faviconOf(form.value.url, '') : ''
+    const url = form.value.url.trim()
+    if (!url) return ''
+    // 优先用页面里声明的真图标；没解析到才回落到 origin 的 /favicon.ico
+    return currentIcon.value || faviconOf(url, '')
   }
   return form.value.icon
 })
@@ -135,18 +225,24 @@ const iconHint = computed(
  * favicon 模式下那行状态字。
  *
  * 「没抓到」必须**说出来** —— 否则用户选了「网站图标」，看到字母块，
- * 会以为是这个选项坏了，而不是「这个站点本来就没有 /favicon.ico」。
+ * 会以为是这个选项坏了，而不是「这个站点本来就没有图标」。
+ *
+ * ⚠️ 「正在读页面 HTML」要**排在 `<img>` 的加载结果之前**判断：
+ *    那期间预览用的是兜底地址 `/favicon.ico`，它失败了不代表真图标也没取到。
+ *    顺序反了会先闪一句「没取到站点图标」，然后真图标加载出来又变绿。
  */
 const faviconStatus = computed(() => {
   if (iconMode.value !== 'favicon') return ''
+  if (!form.value.url.trim()) return t('bookmark.iconNeedUrl')
+  if (resolveState.value === 'loading') return t('bookmark.iconFaviconLoading')
   if (faviconState.value === 'ok') return t('bookmark.iconFaviconOk')
   if (faviconState.value === 'fail') return t('bookmark.iconFaviconFail')
-  if (!form.value.url.trim()) return t('bookmark.iconNeedUrl')
   return t('bookmark.iconFaviconLoading')
 })
 
 const faviconTone = computed(() => {
   if (iconMode.value !== 'favicon') return ''
+  if (!form.value.url.trim() || resolveState.value === 'loading') return 'muted'
   if (faviconState.value === 'ok') return 'ok'
   if (faviconState.value === 'fail') return 'warn'
   return 'muted'
@@ -188,6 +284,15 @@ watch(
     }
     faviconState.value = 'idle'
     errors.value = { name: '', url: '', urlShake: false, nameShake: false }
+    /*
+     * 立刻解析一次，**不等防抖** —— 编辑已有书签时预览要马上是真图标，
+     * 否则会先显示兜底地址、再跳一下。`resolveSiteIcon` 有缓存，
+     * 重复调用（下面 url 的 watch 也会触发一次）不花第二次网络。
+     *
+     * ⚠️ 这里**不重置** `resolvedIcon` / `resolvedFor`：反复打开同一条书签时，
+     *    它们还指着同一个网址 → 预览瞬间就对。网址真的变了由 url 的 watch 清掉。
+     */
+    if (iconMode.value === 'favicon' && isValidUrl(form.value.url)) runResolve()
     nextTick(() => nameEl.value?.focus())
   },
 )
@@ -223,14 +328,27 @@ async function save() {
 
   saving.value = true
   try {
+    /*
+     * ⚠️ favicon 模式要**等一下解析结果**再存。
+     *
+     *    用户填完网址直接点保存是很常见的 —— 那时防抖还没触发、解析也没跑完。
+     *    如果就这么存下去，`icon` 会是空串，卡片上又会退回 `/favicon.ico`
+     *    （也就是这次要修的「Vue 图标」）。`resolveSiteIcon` 有缓存，
+     *    已经解析过的站点这里是**同步命中**，不会多等。
+     *    上限是它自己的 5 秒超时，超了就照旧存空串、走兜底。
+     */
+    let icon = ''
+    if (iconMode.value === 'custom') icon = form.value.icon.trim()
+    else if (iconMode.value === 'favicon') icon = currentIcon.value || (await runResolve()) || ''
+
     const payload = {
       name: form.value.name.trim(),
       url,
       description: form.value.description.trim(),
       categoryId: form.value.categoryId || null,
       iconMode: iconMode.value,
-      // 非 custom 一律清空，见文件头那条 ⚠️
-      icon: iconMode.value === 'custom' ? form.value.icon.trim() : '',
+      // initial 一律清空（见文件头那条 ⚠️）；favicon 存的是解析到的真图标地址
+      icon,
     }
     const ok = isEdit.value
       ? await updateBookmark(props.bookmark.id, payload)

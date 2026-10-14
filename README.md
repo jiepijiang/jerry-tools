@@ -1033,11 +1033,45 @@ curl -o /dev/null -w '%{http_code}\n' \
 
 | 层 | 来源 | 什么时候用 |
 | --- | --- | --- |
-| 1 | 数据里的 `icon` 字段 | 用户自己粘的地址、上传的图片（转 dataURL） |
+| 1 | 数据里的 `icon` 字段 | `custom` 模式：用户自己粘的地址 / 上传的图片；`favicon` 模式：**解析到的真图标地址**（缓存） |
 | 2 | `https://<origin>/favicon.ico` | 第 1 层没有、或**第 1 层不合格被挡下** |
 | 3 | 渐变底 + 首字母 | 第 2 层也加载失败（`BookmarkIcon` 的 `@error`） |
 
-**入口只有一个**：`utils/helpers.js` 的 `faviconOf(url, custom)`。
+**书签的入口**是 `utils/helpers.js` 的 `iconSrcFor(item)`（比 `faviconOf` 多认一个
+`iconMode` 字段，用来区分「用户明确选了首字母」和「没选」）。
+它底下仍然是 `faviconOf(url, custom)`；发现页站点没有 `iconMode`，直接调后者。
+
+> ⚠️ `iconMode` 的 `favicon` 与 `custom` 两条分支现在**走同一条路**
+> （`faviconOf(item.url, item.icon)`）—— 因为 `favicon` 模式下 `icon` 存的就是
+> 解析结果。对**存量数据**仍然逐条等价：老数据 favicon 模式的 `icon` 本来就是空的。
+> 等价性有断言钉着（`scripts/probe-icon-mode.mjs` 的【1】，语料是 437 条真实数据）。
+
+### `favicon` 模式：读页面 HTML，**不猜** `/favicon.ico`（2026-10-14 第二轮）
+
+起因：填 `https://jiepijiang.github.io/jerry-site/` 抓回来的是 **Vue 的 logo**。
+
+根因是 `faviconOf()` 取的是 `new URL(url).origin` —— **丢掉路径**。
+GitHub Pages 的**项目站**是 `user.github.io/repo/`，它的 origin 是 `user.github.io`，
+于是第 2 层去抓 `jiepijiang.github.io/favicon.ico` —— 那是**用户主页仓库**的图标，
+而 `jerry-site/favicon.ico` 是 **404**。四站全是项目站，**全都**显示成了 Vue logo。
+
+浏览器不猜，它下载 HTML 读 `<link rel="icon">`。现在这里做同一件事：
+
+| 环节 | 在哪 | 做什么 |
+| --- | --- | --- |
+| 解析 | `helpers.js` 的 `extractIconHref(html, baseUrl)` | 纯函数。挑 `rel~=icon` → `apple-touch-icon` → `fluid-icon`；`sizes` 大的优先；跳过注释 / `<script>` / `mask-icon` / `data:` |
+| 抓取 | `data/siteIcon.js` 的 `resolveSiteIcon(pageUrl)` | 读 `</head>` 或 256KB 为止（`reader.cancel()` 主动掐断）；5s 超时；按 URL 记忆化（成功永久、失败 60s） |
+| 缓存 | 书签的 `icon` 字段 | 弹窗保存时写入；渲染层照旧走 `iconSrcFor` |
+| 回填 | `useStore.backfillIconSrc()` | 给**已经在库里**的 `favicon` + `icon` 为空的书签补一次，否则这次修复对老数据是零效果 |
+
+**读不到就静默回落**（第 2 层），三种情况都算读不到：站点没声明图标、
+**跨域拿不到 HTML（CORS）**、超时。实测 GitHub Pages 的 HTML 带
+`access-control-allow-origin: *`，所以四站互链这条链路是通的 ——
+**这是本项目能用这条路的前提，换成没有 CORS 的托管就不成立了**。
+
+回填的边界（改动前先读 `useStore.backfillIconSrc` 的注释）：
+只碰 `favicon` + `icon` 为空；**先全部解析完再一次性写盘**（逐条写会写 N 次整表）；
+写盘失败回滚并返回 0。
 
 ### 为什么要有「不合格」这一说
 
@@ -1045,10 +1079,12 @@ curl -o /dev/null -w '%{http_code}\n' \
 
 - **第三方 favicon 服务**（`icons.duckduckgo.com`、`icon.horse`、`t0-t3.gstatic.com`、
   `google.com/s2/favicons` …）—— 国内不可达，批量请求会被限流，一挂挂一整页。
-  这个项目从一开始就定的策略是**一个都不用**，走站点自己的 `/favicon.ico`。
+  这个项目从一开始就定的策略是**一个都不用**，走站点自己的图标。
 - **明文 `http://`** —— HTTPS 页面上是 Mixed Content，控制台留警告，图片还可能被浏览器直接拦掉。
 
 `isUsableIcon()` 判这两类，`isThirdPartyIcon()` 只判第一类（管理页要分开报）。
+这道守卫对**解析出来的真图标**同样生效（`iconSrcFor` 里 favicon 与 custom 共用一条路），
+所以 `probe-icon-mode.mjs` 的【4c】专门钉住它 —— 证明【4b】不是「什么都放行」。
 
 ⚠️ **`www.gstatic.com` 不在黑名单里** —— 那是 Google 自家站点的静态资源
 （AI Studio / Firebase / TensorFlow 的图标都从那儿发），是「站点自己的 CDN」。
@@ -1074,20 +1110,25 @@ curl -o /dev/null -w '%{http_code}\n' \
 但**渲染层这层过滤才是保险**：线上库那份改不动（要 `service_role`），
 用户自己粘的地址更没人管。
 
-回归脚本（都在 `/tmp`，不入仓库，跟 `transfer-*.mjs` 一套）：
+回归脚本（**进仓库、进 CI**）：
 
 | 脚本 | 覆盖 | 断言数 |
 | --- | --- | --- |
-| `icon-policy.mjs` | 纯函数：`isThirdPartyIcon` / `isUsableIcon` / 种子数据不变量 | 34 |
-| `icon-ui.mjs` | 浏览器端：12 个渲染点实际给 `<img>` 选了哪个 src | 15 |
-| `i18n-parity.mjs` | 中英键位双向一致 + 占位符一致 + 没有空文案 | 19 |
+| `scripts/probe-icon-mode.mjs` | 纯函数：`iconSrcFor` 的语义 + **437 条真实数据上的等价性** + `extractIconHref` 的 20 个解析用例 | 14 |
+| `scripts/probe-icon-source.mjs` | 真浏览器走 UI：选来源 → 存盘 → 卡片渲染，含**存量数据回填** | 34 |
 
-⚠️ `icon-ui.mjs` 有个**必须知道的写法**：不能在事后 `querySelectorAll('img')` 查。
-`faviconOf` 给出的 `/favicon.ico` 一旦加载失败，`BookmarkIcon` 的 `@error` 会把
-`<img>` 摘掉换成首字母 —— 事后查 DOM 只能看到「兜底后的世界」，
-第 2 层的证据已经被抹掉了（当时表现为 4 条断言全 `null`，看着像 bug）。
-正解是 `addInitScript` 里装 `MutationObserver`，把**每一个**进过 DOM 的
-`<img src>` 记下来。副作用还挺好：整条链路不用碰网络，也不用 `page.route` 打桩。
+前两个之外还有 `check-css-vars.mjs` / `check-i18n-*.mjs`，都跑在 `npm ci` **之前**
+（零依赖）。`probe-icon-source.mjs` 要真浏览器 + 真 Supabase，**进不了 CI**。
+
+⚠️ `probe-icon-source.mjs` 有两个**必须知道的坑**（都写在那个文件头上）：
+
+- `faviconOf` 给出的 `/favicon.ico` 一旦加载失败，`BookmarkIcon` 的 `@error` 会把
+  `<img>` 从 DOM 摘掉 —— 事后查 DOM 只能看到「兜底后的世界」，
+  各种来源**分不出来**，断言会退化恒真。所以那个探针必须喂得到**真图**。
+- **只要注册了 `page.route`，`/favicon.ico` 的 `<img>` 就一定失败**
+  （那个路径由浏览器进程的 favicon 服务接管，和渲染进程侧的拦截对不上，
+  请求既不发也不报错）。所以探针里按用例开关路由：只有「页面声明了真图标」
+  那条开着，跑完立刻 `unroute`。
 
 ---
 

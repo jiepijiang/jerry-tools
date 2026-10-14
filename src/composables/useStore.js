@@ -17,6 +17,7 @@ import { seedBookmarks, seedCategories } from '@/data/seed'
 // ⚠️ `seed-discover` 是**动态 import**（见 `readSites()`），故意不在这里引入 ——
 //    377 条发现页数据 90.5KB，只有发现页用得上，不该让每个访客都下载。
 import { replyFeedback, submitFeedback } from '@/data/feedback'
+import { resolveSiteIcon } from '@/data/siteIcon'
 import {
   buildTree,
   bookmarkKey,
@@ -577,6 +578,95 @@ async function loadAll() {
   }
 
   state.ready = true
+
+  /*
+   * 图标地址回填。**故意不 await** —— 它最多要发 `ICON_BACKFILL_LIMIT` 次网络请求，
+   * 阻塞在这里会把首屏推后一大截（这个项目为「白屏 3.5s → 30ms」专门优化过）。
+   * 放在这里而不是 `initStore()`：登录 / 退出会走 `reloadStore()` → `loadAll()`，
+   * 那条路径下书签是**从云端**读回来的，同样需要回填。
+   */
+  backfillIconSrc().catch(() => {})
+}
+
+/* ------------------------------------------------------------- 图标回填 */
+
+/**
+ * 把「网站图标」模式的书签补上**解析到的真图标地址**。
+ *
+ * ## 为什么需要
+ *
+ * 2026-10-14 之前，favicon 模式取的是 `origin + '/favicon.ico'` —— 那是**猜**的。
+ * 现在改成读页面 HTML、拿站点自己声明的图标（`resolveSiteIcon()`），
+ * 结果缓存进 `icon` 字段。但那个缓存**只在弹窗保存时才写**，
+ * 已经在库里的书签不会自己变 —— 不去回填的话，这次修复对**已有书签是零效果**。
+ *
+ * 后果很具体：GitHub Pages 项目站（`user.github.io/repo/`）的 `/favicon.ico`
+ * 是 404，于是回落到**域名根**的图标 —— 拿回来的是**别人家**的图。
+ * 四站全是项目站，全都显示成了用户主页仓库的 Vue logo。
+ *
+ * ## 边界（改动前先读）
+ *
+ * · 只碰 `resolveIconMode(b) === 'favicon'` 且 `icon` 为空的 —— 其余一律不动。
+ *   所以它**不会覆盖**用户自己设的图标，也不会把「首字母」改回图标。
+ * · 解析不到（站点没声明 / 跨域读不到 / 超时）**什么都不写** —— 下次打开再试。
+ *   代价是永久没有图标的站点每次加载都会被重试一次；上限 60 条，实际就是几次请求。
+ * · **先全部解析完、再一次性写盘**。逐条 `updateBookmark` 会写 N 次整表
+ *   （云端模式下就是 N 次网络写），而这里只需要 1 次。
+ * · 写盘走 `withRollback`：失败就回滚内存并返回 0，不假装成功。
+ *
+ * @returns {Promise<number>} 实际补上几条（0 = 没有可补的，或写盘失败）
+ */
+const ICON_BACKFILL_LIMIT = 60
+const ICON_BACKFILL_CONCURRENCY = 4
+
+export async function backfillIconSrc() {
+  const targets = state.bookmarks
+    .filter((b) => resolveIconMode(b) === 'favicon' && !String(b.icon || '').trim())
+    .slice(0, ICON_BACKFILL_LIMIT)
+  if (!targets.length) return 0
+
+  // ① 并发解析。这一步只发 GET、不碰存储，所以并发高一点无所谓
+  const resolved = new Map()
+  let cursor = 0
+  await Promise.all(
+    Array.from({ length: ICON_BACKFILL_CONCURRENCY }, async () => {
+      for (;;) {
+        const i = cursor++
+        if (i >= targets.length) return
+        const b = targets[i]
+        let href = ''
+        try {
+          href = await resolveSiteIcon(b.url)
+        } catch {
+          /* resolveSiteIcon 声称永不抛错，但这里是后台任务，再兜一层 */
+        }
+        if (href) resolved.set(b.id, href)
+      }
+    }),
+  )
+  if (!resolved.size) return 0
+
+  // ② 一次性写回。逐条**重新确认**：解析期间用户可能自己改过这一条
+  const prev = clone(state.bookmarks)
+  let filled = 0
+  for (const b of state.bookmarks) {
+    const href = resolved.get(b.id)
+    if (!href) continue
+    if (resolveIconMode(b) !== 'favicon' || String(b.icon || '').trim()) continue
+    b.icon = href
+    filled++
+  }
+  if (!filled) return 0
+
+  const ok = await withRollback(
+    () => {},
+    () => {
+      state.bookmarks = prev
+    },
+    storageKeys.bookmarks,
+    state.bookmarks,
+  )
+  return ok ? filled : 0
 }
 
 /** 应用启动时调一次。 */
