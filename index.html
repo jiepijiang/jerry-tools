@@ -29,11 +29,33 @@
     <meta property="og:locale" content="zh_CN" />
     <meta property="og:site_name" content="Jerry 导航" />
 
+    <!--
+      ⚠️ og:image 必须写完整的绝对 URL（含 /jerry-tools/ 子路径）。
+      分享卡片的抓取方**不解析相对路径** —— 写成 /static/img/… 的话，
+      页面本身一切正常，只有卡片静默地没有图。
+
+      ⚠️ 这里的域名和子路径，和 vite.config.js 的 REPO_NAME 是**两处独立的地方**。
+      换域名 / 换仓库名时，改了一处不会提醒另一处。
+      构建期有守卫盯着这件事：npm run check:meta。
+    -->
+    <meta property="og:url" content="https://jiepijiang.github.io/jerry-tools/" />
+    <meta
+      property="og:image"
+      content="https://jiepijiang.github.io/jerry-tools/static/img/background.jpg"
+    />
+    <meta property="og:image:width" content="1186" />
+    <meta property="og:image:height" content="711" />
+    <meta property="og:image:alt" content="Jerry 导航 —— 网址导航与书签管理" />
+
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Jerry 导航 - 网址导航与书签管理" />
     <meta
       name="twitter:description"
       content="Jerry 导航是一个轻量、可自定义的网址导航与书签管理工具，支持分类管理、快速搜索、收藏常用链接与跨设备访问。"
+    />
+    <meta
+      name="twitter:image"
+      content="https://jiepijiang.github.io/jerry-tools/static/img/background.jpg"
     />
 
     <script type="module" src="/src/main.js"></script>

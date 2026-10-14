@@ -67,6 +67,18 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
 
+      - name: 核对分享卡片标签（og / twitter）
+        # 纯静态守卫，零依赖（只读 dist/index.html + 几个 node 内建模块）。
+        #
+        # 钉住的是一个**静默故障**：og:image 里写死的域名 + `/jerry-tools/`
+        # 子路径，和 vite.config.js 的 REPO_NAME 是两处独立的地方 ——
+        # 换仓库名时改了一处不会提醒另一处，症状是「站点好好的，
+        # 分享出去的卡片却指着一张 404 的图」，肉眼看不出来。
+        #
+        # 判据不写死常量，而是**从产物反推实际 base** 再要求 og 自洽，
+        # 所以换仓库名时这里不用改。
+        run: npm run check:meta
+
       - name: 核对 Supabase 配置是否已注入
         # 没注入的话线上会静默退回纯本地模式（页面照样能开，
         # 只是登录、同步、分享全部不可用）—— 那种"看起来正常"的故障

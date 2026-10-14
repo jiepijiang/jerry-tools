@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check:i18n": "node scripts/check-i18n-parity.mjs; p=$?; node scripts/check-i18n-text.mjs; t=$?; exit $((p + t > 0))",
+    "check:meta": "node scripts/check-meta.mjs",
     "build:nosb": "VITE_SUPABASE_URL= VITE_SUPABASE_ANON_KEY= vite build --outDir dist-nosb --emptyOutDir",
     "serve:dist": "node scripts/serve-static.mjs dist /jerry-tools/ 5200",
     "probe:reset": "node scripts/reset-default.mjs",
