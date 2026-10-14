@@ -110,6 +110,20 @@ const currentIcon = computed(() =>
 )
 
 /**
+ * 「上一次解析到、并且已经存进这条书签」的真图标地址。
+ *
+ * ⚠️ 只在**网址没被改过**时才可用 —— 改了网址，它指向的就是上一个站点的图标。
+ * ⚠️ 它比 `faviconOf(url, '')` 可靠得多：那个是**猜**的（`origin + /favicon.ico`），
+ *    这个是我们真的读了页面 HTML 解析出来、还存过盘的。
+ *    所以「解析期间拿它垫着」是安全的 —— 见 `iconPreview` 的注释。
+ */
+const storedIcon = computed(() => {
+  const b = props.bookmark
+  if (!b || !b.icon) return ''
+  return String(b.url || '').trim() === form.value.url.trim() ? b.icon : ''
+})
+
+/**
  * 去读页面 HTML，拿站点声明的图标地址。返回结果（`''` = 没解析到）。
  *
  * ⚠️ 有竞态：用户连续改网址时，**先发的请求可能后回来**，
@@ -140,6 +154,30 @@ async function runResolve() {
 /** 打字时别每个字符都发一次请求。`resolveSiteIcon` 自己有缓存，这里只是省往返。 */
 const runResolveDebounced = debounce(runResolve, 450)
 
+/**
+ * 立刻把状态推进到「正在解析」——**不等防抖**。
+ *
+ * ⚠️ 这一步必须**同步**做。只靠 `runResolveDebounced` 的话，那 450ms 里
+ *    `resolveState` 还是 `idle`，`iconPreview` 就会去用**猜的**兜底地址，
+ *    而它经常能加载成功（GitHub Pages 项目站猜出来的是域名根的图标），
+ *    于是 `<img>` 的 `@load` 先把状态置成 ok，真图标到达后又退回 loading ——
+ *    状态字「已获取 → 正在获取」闪一下。
+ *
+ *    实测（2026-10-14，60ms 采样，目标 = 本站的 Pages 项目站）：
+ *      ~66ms  → 381ms   正在获取站点图标…  .../favicon.ico
+ *      ~443ms           已获取站点图标     .../favicon.ico      ← 假绿
+ *      ~507ms → 819ms   正在获取站点图标…  .../favicon.ico      ← 这里才是 runResolve
+ *    那次假绿（443ms）就落在防抖窗口里，**在** `runResolve` 之前。
+ *
+ * ⚠️ 网址不合法时不进 loading —— 否则状态字会一直说「正在获取」，
+ *    而实际上 `runResolve` 会立刻返回、什么都不会做。
+ */
+function markResolving() {
+  if (iconMode.value !== 'favicon') return
+  if (!isValidUrl(form.value.url.trim())) return
+  resolveState.value = 'loading'
+}
+
 /** 网址变了：立刻作废旧结果，再（防抖后）重新解析。 */
 watch(
   () => form.value.url,
@@ -148,13 +186,19 @@ watch(
       resolvedIcon.value = ''
       resolvedFor.value = ''
     }
-    if (iconMode.value === 'favicon') runResolveDebounced()
+    if (iconMode.value === 'favicon') {
+      markResolving()
+      runResolveDebounced()
+    }
   },
 )
 
 /** 切到「网站图标」时也解析一次 —— 可能之前在别的来源上待着。 */
 watch(iconMode, (mode) => {
-  if (mode === 'favicon') runResolveDebounced()
+  if (mode === 'favicon') {
+    markResolving()
+    runResolveDebounced()
+  }
 })
 
 /**
@@ -170,14 +214,42 @@ watch(iconMode, (mode) => {
  *    所以 initial / favicon 两条分支虽然和 `iconSrcFor` 结果一致，
  *    仍是**各写一份**。改 `iconSrcFor` 的语义时，这里不会跟着变
  *    （`probe-icon-source.mjs` 的造红 C 实测确认过这一点）。
+ *
+ * ⚠️⚠️ 2026-10-14（第四轮）：favicon 分支按**三档**取，中间那档是关键。
+ *
+ *    ① 解析到了真图标         → 用它
+ *    ② 还在解析（loading）    → 用 `storedIcon`（这条书签**上次存下来的真图标**），
+ *                              没有就露字母块
+ *    ③ 解析完了、站点没声明   → 才回落到猜的 `origin/favicon.ico`
+ *
+ *    第 ② 档**绝对不能**写成 `faviconOf(url, '')`。那个是**猜**的地址，
+ *    而它经常能加载成功（GitHub Pages 项目站猜出来的是**域名根**的图标，
+ *    也就是别人家主页的 Vue logo）—— 一旦加载成功，`<img>` 的 `@load`
+ *    就把 `faviconState` 置成 `'ok'`，真图标随后到达时 src 一变又退回
+ *    `'loading'`，状态字会「已获取站点图标 → 正在获取站点图标…」闪一下。
+ *    实测复现（60ms 采样，目标 = 本站的 Pages 项目站）：
+ *
+ *      ~66ms  →  381ms   正在获取站点图标…  .../favicon.ico
+ *      ~443ms            已获取站点图标     .../favicon.ico      ← 假绿，只闪 64ms
+ *      ~507ms →  819ms   正在获取站点图标…  .../favicon.ico
+ *      ~882ms            正在获取站点图标…  .../jerry-skills/favicon.svg
+ *      ~945ms → 3474ms   已获取站点图标     .../jerry-skills/favicon.svg  ← 真的
+ *
+ *    代价是新建书签时解析期间看到的是字母块（而不是一张**可能不对**的图）——
+ *    这是有意的：宁可先露字母块，也别先显示一张错的图。字母块本身就是
+ *    「还没有图标」的正确呈现，而且状态字同时在说「正在获取站点图标…」。
  */
 const iconPreview = computed(() => {
   if (iconMode.value === 'initial') return ''
   if (iconMode.value === 'favicon') {
     const url = form.value.url.trim()
     if (!url) return ''
-    // 优先用页面里声明的真图标；没解析到才回落到 origin 的 /favicon.ico
-    return currentIcon.value || faviconOf(url, '')
+    // ① 解析到了页面声明的真图标
+    if (currentIcon.value) return currentIcon.value
+    // ② 解析中：用上次存下来的真图标垫着（**不是**猜的兜底地址）
+    if (resolveState.value === 'loading') return storedIcon.value
+    // ③ 解析完了但站点没声明图标 → 回落到猜的 /favicon.ico（老行为，不能丢）
+    return faviconOf(url, '')
   }
   return form.value.icon
 })

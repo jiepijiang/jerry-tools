@@ -26,8 +26,11 @@
      ⑧ **存量数据回填** —— 直接往存储里塞「icon 为空的 favicon 书签」再刷新，
         必须自动补上真图标；同时**不能**动 initial / custom / 已有图标的条目
         （这一条覆盖的是「修好**已有**书签」的那一半，①~⑦ 只覆盖新数据）
+     ⑨ **状态字时间线单调** —— 不能出现「已获取站点图标」又退回「正在获取站点图标…」，
+        而且「声明了真图标」的用例里预览 src 历史里一次都不该出现猜的 `/favicon.ico`。
+        （2026-10-14 第四轮修的「预览假绿闪烁」，假绿只持续 **64ms** —— 见 ⑨ 的注释）
 
-   ══ ⚠️ 三个必须知道的坑（都是实测踩出来的）════════════════════════
+   ══ ⚠️ 四个必须知道的坑（都是实测踩出来的）════════════════════════
 
    【坑 1】`/favicon.ico` 这个路径**绕不过 page.route，也不发 request 事件**
 
@@ -94,6 +97,7 @@
    ========================================================================= */
 
 import { createServer } from 'node:http'
+import { setTimeout as sleep } from 'node:timers/promises'
 import pw from './lib/playwright.mjs'
 
 const { chromium } = pw
@@ -121,9 +125,12 @@ function check(name, ok, detail = '') {
 /* 自带站点 A：真 http 服务（坑 1 —— /favicon.ico 只能靠真响应）        */
 /* ------------------------------------------------------------------ */
 
+/** 站点 A 的 HTML 响应延迟。见 `startIconServer` 里的注释。 */
+const SLOW_MS = 600
+
 function startIconServer() {
   return new Promise((resolve) => {
-    const srv = createServer((req, res) => {
+    const srv = createServer(async (req, res) => {
       const { pathname } = new URL(req.url, 'http://127.0.0.1')
       const cors = { 'access-control-allow-origin': '*', 'cache-control': 'no-store' }
       if (/\.(ico|png)$/i.test(pathname)) {
@@ -131,6 +138,19 @@ function startIconServer() {
         res.end(PNG)
         return
       }
+      /*
+       * 「没有声明图标的页面」故意**慢 600ms**。
+       *
+       * ⚠️ 这个延迟是让 ⑨a（状态字时间线单调）**有判别力**的必要条件。
+       *    本地服务原本是毫秒级的，`runResolve` 一眨眼就跑完 —— 倒退窗口
+       *    只有 ~3ms，40ms 的采样根本抓不到，⑨a 会退化成**恒真断言**
+       *    （实测踩过两次，见 ⑨a 的注释）。600ms 也更接近真实站点：
+       *    真网络一次 HTML 往返就是几百毫秒。
+       *
+       * ⚠️ 只对 HTML 路径加，图片路径不加 —— 图片慢会改变 `<img>` 自己的
+       *    load 时序，那是另一件事。
+       */
+      await sleep(SLOW_MS)
       // 其余路径 = 「一个没有声明图标的页面」，用来测⑤的兜底
       res.writeHead(200, { ...cors, 'content-type': 'text/html; charset=utf-8' })
       res.end('<!doctype html><html><head><title>no icon here</title></head><body>ok</body></html>')
@@ -237,7 +257,12 @@ const CASES = [
   {
     segIndex: 1,
     needsRoute: false, // ⚠️ 这条要看 /favicon.ico —— 不能挂路由（坑 4）
-    id: 'favicon → 页面没声明，回落 /favicon.ico',
+    /*
+     * ⚠️ 这条同时是 ⑨a 的**唯一**判别用例：只有它满足「猜的兜底地址**能加载成功**
+     *    （站点 A 真的提供 `/favicon.ico`）+ 解析耗时足够长（HTML 延迟 600ms）」。
+     *    另一条 favicon 用例挂着路由，猜的地址被坑 4 打死，⑨a 在它上面**恒真**。
+     */
+    id: `favicon → 页面没声明 + 响应慢 ${SLOW_MS}ms，回落 /favicon.ico`,
     name: 'ZZ兜底',
     url: `${SITE}no-icon-page/`,
     icon: '',
@@ -356,6 +381,32 @@ for (const c of CASES) {
   await segs.nth(c.segIndex).click()
 
   /*
+   * ⑨ 的采样器 —— 装在这个位置（切完来源、**填网址之前**）。
+   *
+   * ⚠️ 必须早于填网址：要抓的正是「解析还没回来」那一段。
+   *    装晚了就只剩一个终态，永远看不出倒退。
+   * ⚠️ 用**页内** `setInterval` 而不是 Playwright 侧轮询：侧轮询每次都要过
+   *    一遍 CDP，采样间隔会被拉到几百毫秒 —— 实测那个假绿只持续 **64ms**，
+   *    侧轮询直接漏掉（150ms 采不到，页内 40ms 采得到）。
+   */
+  if (c.segIndex === 1) {
+    await page.evaluate(() => {
+      window.__iconTrace = []
+      const tick = () => {
+        const el = document.querySelector('.bm-form .icon-status')
+        const img = document.querySelector('.bm-form .bm-icon img')
+        window.__iconTrace.push({
+          t: Math.round(performance.now()),
+          cls: el ? el.className.replace('icon-status', '').trim() : '',
+          src: img ? img.getAttribute('src') : '',
+        })
+      }
+      tick()
+      window.__iconTraceTimer = setInterval(tick, 40)
+    })
+  }
+
+  /*
    * `.bm-form input.field` 的顺序由模板决定：
    *   [自定义时] 图标地址 → 名称 → 网址 → 简介
    *   [其余]             名称 → 网址 → 简介
@@ -395,6 +446,104 @@ for (const c of CASES) {
       previewOk,
       `实际 ${JSON.stringify(gotPreview)}`,
     )
+
+    /*
+     * ⑨ 状态字**时间线**单调 —— 2026-10-14 那个「预览假绿闪烁」的判据。
+     *
+     * 缺陷长这样（60ms 采样，目标 = 本站的 Pages 项目站）：
+     *
+     *   ~66ms  →  381ms   正在获取站点图标…  .../favicon.ico
+     *   ~443ms            已获取站点图标     .../favicon.ico      ← 假绿
+     *   ~507ms →  819ms   正在获取站点图标…  .../favicon.ico      ← 倒退
+     *   ~945ms → 3474ms   已获取站点图标     .../jerry-skills/favicon.svg
+     *
+     * 根因：解析期间预览用了**猜的** `origin/favicon.ico`，它加载成功 →
+     * `<img>` 的 @load 把状态置成 ok；真图标到达、src 一变又退回 loading。
+     *
+     * ⚠️ 单看终态（④a / ④b）**测不出**这个 —— 终态是对的，问题在中间那 64ms。
+     *    所以这里必须看**序列**，不能只看最后一个值。
+     */
+    /*
+     * ⚠️⚠️ 采样窗口必须**覆盖整轮解析**，不能一等到预览地址对上就收工。
+     *
+     *     这条是实测踩出来的：⑨a 一开始写成「④a ④b 过了就收 trace」，
+     *     结果它是**恒真**的 —— 兜底用例里预览地址在 5313ms 就对上了
+     *     （那时显示的还只是**猜的**兜底地址），而 `runResolve` 要等 450ms
+     *     防抖、5730ms 才真正开跑；采样在 5313ms 就停了，倒退根本没被看到。
+     *     用 `ICON_TRACE_DUMP=1` 打出时间线才看出来：
+     *
+     *       5232ms:muted → 5283ms:muted<favicon.ico> → 5313ms:ok<favicon.ico>   ← 采样到此为止
+     *
+     *     `probe-icon-source.mjs` 的造红 B（去掉 `markResolving`）就是靠这段
+     *     才红的。1200ms > 450ms 防抖 + 一次本地/fulfill 的往返。
+     */
+    await page.waitForTimeout(1200)
+
+    const trace = await page.evaluate(() => {
+      clearInterval(window.__iconTraceTimer)
+      return window.__iconTrace
+    })
+    // 去重成相位序列（连续同 (cls, src) 只留第一条）
+    const phases = []
+    for (const s of trace) {
+      const k = `${s.cls}|${s.src}`
+      if (phases.length && phases[phases.length - 1].k === k) continue
+      phases.push({ ...s, k })
+    }
+    /*
+     * 排查用：`ICON_TRACE_DUMP=1 npm run probe:icon-source`
+     * 把完整相位时间线打出来。⑨a 红的时候**必须**看这个 ——
+     * 「哪一相位倒退的」和「压根没出现过 ok」是两回事，修法完全不同。
+     */
+    if (process.env.ICON_TRACE_DUMP) {
+      console.log(
+        `    [trace] ${phases.map((p) => `${p.t}ms:${p.cls || 'muted'}${p.src ? `<${p.src.split('/').pop()}>` : ''}`).join(' → ')}`,
+      )
+    }
+    let regression = ''
+    for (let i = 1; i < phases.length; i++) {
+      if (phases[i - 1].cls === 'ok' && phases[i].cls !== 'ok') {
+        regression = `${phases[i - 1].t}ms 是 ok → ${phases[i].t}ms 退回 ${phases[i].cls || 'muted'}`
+        break
+      }
+    }
+    check(
+      `⑨a 状态字时间线单调（没有「已获取 → 正在获取」倒退）`,
+      !regression,
+      regression
+        ? `${regression}｜相位：${phases.map((p) => `${p.t}ms:${p.cls || 'muted'}`).join(' → ')}`
+        : '',
+    )
+
+    /*
+     * ⑨b 「页面**声明了**真图标」的用例里，预览 src 的历史里**一次都不该**
+     *     出现猜的 `origin/favicon.ico`。
+     *
+     *     这条比 ⑨a 更锋利：⑨a 只要求不倒退，而「先显示错的图、再换成对的」
+     *     如果中间没被采样到 ok，⑨a 是放过的 —— 但用户确实看见了那张**别人家的
+     *     logo**（GitHub Pages 项目站猜出来的就是域名根的图标）。Jerry 的原话
+     *     是「我要抓的是真图标，不是这个 vue 路径的图标」，所以这条要钉住。
+     *
+     *     ⚠️ 只对「声明地址 ≠ 猜的地址」的用例断言。兜底那条用例里
+     *        `origin/favicon.ico` 本来就是**正确答案**，断言它不出现是错的。
+     */
+    const guess = (() => {
+      try {
+        return new URL(c.url).origin + '/favicon.ico'
+      } catch {
+        return ''
+      }
+    })()
+    if (c.wantStored && c.wantStored !== guess) {
+      const guessed = trace.filter((s) => s.src === guess)
+      check(
+        `⑨b 解析期间预览从未出现过猜的 /favicon.ico`,
+        guessed.length === 0,
+        guessed.length
+          ? `出现过 ${guessed.length} 次，最早 ${guessed[0].t}ms｜src 历史：${[...new Set(trace.map((s) => s.src).filter(Boolean))].join(' , ')}`
+          : '',
+      )
+    }
   }
 
   await page.locator('.modal-foot .btn-primary').click()
