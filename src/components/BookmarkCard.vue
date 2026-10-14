@@ -20,7 +20,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import BookmarkIcon from '@/components/BookmarkIcon.vue'
 import { settings } from '@/composables/useSettings'
 import { useI18n } from '@/composables/useI18n'
-import { faviconOf } from '@/utils/helpers'
+import { iconSrcFor } from '@/utils/helpers'
 
 const { t } = useI18n()
 
@@ -52,7 +52,7 @@ const emit = defineEmits(['open', 'edit', 'delete', 'dragstart', 'dragend', 'dra
 
 const pressed = ref(false)
 
-const iconSrc = computed(() => faviconOf(props.bookmark.url, props.bookmark.icon))
+const iconSrc = computed(() => iconSrcFor(props.bookmark))
 
 /** 实际生效的排列密度。极简布局会强制压到 compact。 */
 const density = computed(() => (props.dense ? 'compact' : settings.density))

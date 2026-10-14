@@ -101,8 +101,8 @@ const SPECS = {
     table: 'bookmarks',
     kind: 'rows',
     conflict: 'user_id,id',
-    columns: ['id', 'category_id', 'name', 'url', 'description', 'icon', 'sort_order', 'created_at'],
-    defaults: { category_id: null, name: '', url: '', description: '', icon: '', sort_order: 0, created_at: today },
+    columns: ['id', 'category_id', 'name', 'url', 'description', 'icon', 'icon_mode', 'sort_order', 'created_at'],
+    defaults: { category_id: null, name: '', url: '', description: '', icon: '', icon_mode: 'favicon', sort_order: 0, created_at: today },
   },
   [storageKeys.notes]: {
     table: 'notes',

@@ -17,7 +17,16 @@ import { seedBookmarks, seedCategories } from '@/data/seed'
 // ⚠️ `seed-discover` 是**动态 import**（见 `readSites()`），故意不在这里引入 ——
 //    377 条发现页数据 90.5KB，只有发现页用得上，不该让每个访客都下载。
 import { replyFeedback, submitFeedback } from '@/data/feedback'
-import { buildTree, bookmarkKey, clone, flattenTree, formatDate, normalizeUrl, uid } from '@/utils/helpers'
+import {
+  buildTree,
+  bookmarkKey,
+  clone,
+  flattenTree,
+  formatDate,
+  normalizeUrl,
+  resolveIconMode,
+  uid,
+} from '@/utils/helpers'
 
 export const state = reactive({
   ready: false,
@@ -878,6 +887,9 @@ export async function createBookmark(data) {
     name: data.name.trim(),
     url: normalizeUrl(data.url),
     description: (data.description || '').trim(),
+    // ⚠️ 这里必须**显式**带上 iconMode —— 本函数是逐字段构造对象，
+    //    漏一个字段就是静默丢失（弹窗传了也没用）。
+    iconMode: resolveIconMode({ iconMode: data.iconMode, icon: data.icon }),
     icon: data.icon || '',
     sortOrder: siblings.length,
     createdAt: formatDate(),
@@ -951,6 +963,9 @@ export async function upsertBookmarks(items) {
       name: name || url,
       url,
       description: desc,
+      // 导入时同样要带上 —— 从别的 jerry-tools 导出文件里带过来的 iconMode 得留下，
+      // 从浏览器书签导入（没有这个字段）则按老行为推断。
+      iconMode: resolveIconMode({ iconMode: data.iconMode, icon: data.icon }),
       icon: data.icon || '',
       sortOrder: nextOrder[cat]++,
       createdAt: formatDate(),

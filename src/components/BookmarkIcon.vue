@@ -24,6 +24,18 @@ const props = defineProps({
   lazy: { type: Boolean, default: true },
 })
 
+/*
+ * 把「图到底加载出来没有」报出去。
+ *
+ * ⚠️ 只有**编辑弹窗**在用（要显示「已获取站点图标 / 没抓到，将显示首字母」）。
+ *    卡片列表**不该**监听它 —— 那会让每个图标多一次组件事件，
+ *    而列表里没人在意这件事。
+ *
+ * ⚠️ `error` 在 `src` 为空时**不会**发出（`<img>` 压根没渲染），
+ *    所以「没有图」和「图加载失败」在调用方看来是两回事，别混为一谈。
+ */
+const emit = defineEmits(['load', 'error'])
+
 const failed = ref(false)
 const loaded = ref(false)
 
@@ -34,6 +46,16 @@ watch(
     loaded.value = false
   },
 )
+
+function onLoad() {
+  loaded.value = true
+  emit('load')
+}
+
+function onError() {
+  failed.value = true
+  emit('error')
+}
 
 const showImage = computed(() => !!props.src && !failed.value)
 
@@ -63,8 +85,8 @@ const style = computed(() => ({
       :alt="name"
       :loading="lazy ? 'lazy' : 'eager'"
       referrerpolicy="no-referrer"
-      @load="loaded = true"
-      @error="failed = true"
+      @load="onLoad"
+      @error="onError"
     />
   </div>
 </template>

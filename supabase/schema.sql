@@ -76,6 +76,9 @@ create table if not exists public.bookmarks (
   url         text        not null,
   description text        not null default '',
   icon        text        not null default '',
+  -- 图标来源：initial(首字母) / favicon(站点图标，默认) / custom(自定义 icon 列)。
+  -- ⚠️ 默认 'favicon' = 老行为，存量行零变化。见 007 迁移与 helpers.js 的 ICON_MODES。
+  icon_mode   text        not null default 'favicon',
   sort_order  int         not null default 0,
   created_at  timestamptz not null default now(),
   primary key (user_id, id)

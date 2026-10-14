@@ -12,7 +12,7 @@ import { state } from '@/composables/useStore'
 import { settings } from '@/composables/useSettings'
 import { searchEngines } from '@/data/seed'
 import { useI18n } from '@/composables/useI18n'
-import { faviconOf, hostOf } from '@/utils/helpers'
+import { faviconOf, hostOf, iconSrcFor } from '@/utils/helpers'
 
 const props = defineProps({ modelValue: { type: Boolean, default: false } })
 const emit = defineEmits(['update:modelValue'])
@@ -46,7 +46,8 @@ const results = computed(() => {
       name: b.name,
       desc: b.description,
       url: b.url,
-      icon: faviconOf(b.url, b.icon),
+      // 书签走 iconSrcFor：它认用户的「图标来源」选择（首字母 / 站点图标 / 自定义）
+      icon: iconSrcFor(b),
     }))
 
   const sites = state.sites
@@ -63,6 +64,8 @@ const results = computed(() => {
       name: s.title,
       desc: s.description,
       url: s.url,
+      // ⚠️ 这里是**发现页站点**（`state.sites`），不是用户书签 ——
+      //    那份数据没有 iconMode 字段，所以照旧用 faviconOf。
       icon: faviconOf(s.url, s.icon),
     }))
 

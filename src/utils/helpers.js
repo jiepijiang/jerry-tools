@@ -151,6 +151,10 @@ export function isUsableIcon(src) {
  *
  * ⚠️ 调用点要写成 `faviconOf(url, icon)`，**不要**写 `icon || faviconOf(url)` ——
  *    后者把自定义图标整个绕过去了，这条兜底逻辑一行都不会执行。
+ *
+ * ⚠️ 2026-10-14 起，**渲染书签**的调用点应该改用 `iconSrcFor(item)`（见下）——
+ *    它多认一个 `iconMode` 字段，用来区分「用户明确选了首字母」和「没选」。
+ *    本函数仍然是它的底座，直接调它的地方只剩发现页站点（那份数据没有 iconMode）。
  */
 export function faviconOf(url, custom) {
   const c = String(custom || '').trim()
@@ -161,6 +165,54 @@ export function faviconOf(url, custom) {
   } catch {
     return ''
   }
+}
+
+/* =========================================================================
+   图标来源（iconMode）
+   ========================================================================= */
+
+/**
+ * 书签图标的三种来源 —— 用户在添加 / 编辑弹窗里自己选。
+ *
+ *   initial  只用「网站名称首字母 + 渐变底」
+ *   favicon  自动抓站点自己的 `/favicon.ico`（抓不到回落首字母）
+ *   custom   用 `icon` 字段里的地址（自己填的 URL / 上传后的地址）
+ *
+ * ⚠️ 2026-10-14 之前**没有这个字段**，那时「首字母」只是 favicon 的兜底，
+ *    用户看不见也控制不了：站点有图标就一定有图标，想要字母块做不到。
+ */
+export const ICON_MODES = ['initial', 'favicon', 'custom']
+
+/**
+ * 这条书签的图标来源。
+ *
+ * 认不出来的值（老数据没有这个字段、或者数据被改坏了）按**当时的行为**推断，
+ * 而不是抛错或返回空 —— 图标是装饰，不该因为它让整张卡片渲染不出来。
+ */
+export function resolveIconMode(item) {
+  const m = item?.iconMode
+  if (ICON_MODES.includes(m)) return m
+  return String(item?.icon || '').trim() ? 'custom' : 'favicon'
+}
+
+/**
+ * 卡片上真正要渲染的图标地址。返回 `''` 表示「只显示首字母」。
+ *
+ * ⚠️ 对**存量数据**，本函数与老的 `faviconOf(item.url, item.icon)` **逐分支等价**
+ *    （这正是能安全替换掉全部渲染调用点的前提）：
+ *
+ *      iconMode 缺省 + icon 非空 → custom  → faviconOf(url, icon)  ← 同老行为
+ *      iconMode 缺省 + icon 为空 → favicon → faviconOf(url, '')    ← 同老行为
+ *      icon 非空但地址不合格     → custom  → faviconOf 内部回落到站点图标 ← 同老行为
+ *
+ *    唯一的新行为是 `initial`：直接返回 `''`，`<img>` 压根不渲染，只剩字母块。
+ */
+export function iconSrcFor(item) {
+  if (!item) return ''
+  const mode = resolveIconMode(item)
+  if (mode === 'initial') return ''
+  if (mode === 'favicon') return faviconOf(item.url, '')
+  return faviconOf(item.url, item.icon)
 }
 
 /**

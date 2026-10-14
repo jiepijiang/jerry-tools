@@ -10,7 +10,7 @@ import { frequentBookmarks, recordVisit, state } from '@/composables/useStore'
 import { settings, setSetting } from '@/composables/useSettings'
 import { searchEngines } from '@/data/seed'
 import { useI18n } from '@/composables/useI18n'
-import { faviconOf } from '@/utils/helpers'
+import { iconSrcFor } from '@/utils/helpers'
 
 const props = defineProps({
   /** 当前限定的分类（空 = 全部） */
@@ -167,7 +167,7 @@ function blurSoon() {
       <Transition name="pop">
         <div v-if="focused && matches.length" class="match-pop">
           <button v-for="b in matches" :key="b.id" class="match-item" @mousedown.prevent="openBookmark(b)">
-            <img v-if="faviconOf(b.url, b.icon)" :src="faviconOf(b.url, b.icon)" alt="" class="match-icon" />
+            <img v-if="iconSrcFor(b)" :src="iconSrcFor(b)" alt="" class="match-icon" />
             <div class="match-text">
               <strong>{{ b.name }}</strong>
               <span>{{ b.description || b.url }}</span>
@@ -187,7 +187,7 @@ function blurSoon() {
         class="fav-chip"
         @click="openBookmark(b)"
       >
-        <img v-if="faviconOf(b.url, b.icon)" :src="faviconOf(b.url, b.icon)" alt="" />
+        <img v-if="iconSrcFor(b)" :src="iconSrcFor(b)" alt="" />
         <span v-else class="fav-dot" />
         {{ b.name }}
       </button>

@@ -52,8 +52,17 @@ jobs:
         # 两道都用退出码报错（1 = 有问题），所以这里不需要额外判断。
         run: npm run check:i18n
 
-      - name: 静态守卫（CSS 变量）
-        run: npm run check:css-vars
+      - name: 静态守卫（CSS 变量 / 图标来源）
+        # 同样**零依赖**（只读 src/ 源码），放在 npm ci 之前 —— 有问题别浪费一次安装。
+        #
+        #   check:css-vars   引用了不存在的 CSS 变量时，浏览器**不报错**，
+        #                    整条声明被丢弃、样式静默失效。2026-10-14 实测撞上
+        #                    （`--text_color` 真名是 `--main_text_color`），
+        #                    顺手扫出 7 处 `--shadow-color`（真名 `--shadow_color`）
+        #                    —— 那 7 个元素的 box-shadow 一直是空的。
+        #   probe:icon-mode  三种图标来源（首字母 / 网站图标 / 自定义）的语义，
+        #                    以及对**存量数据**的等价性（换渲染调用点不能改老数据的显示）。
+        run: npm run check:css-vars && npm run probe:icon-mode
 
       - name: Install dependencies
         run: npm ci
