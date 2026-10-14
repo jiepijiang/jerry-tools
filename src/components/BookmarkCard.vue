@@ -295,7 +295,7 @@ function onRelease() {
 
 .bm-card:hover {
   background-color: var(--item_hover_color);
-  box-shadow: 0 8px 16px -4px var(--shadow-color);
+  box-shadow: 0 8px 16px -4px var(--shadow_color);
   transform: translateY(-2px);
 }
 
@@ -341,7 +341,7 @@ function onRelease() {
   background-color: var(--main_bg_color);
   border-color: transparent;
   box-shadow:
-    4px 4px 10px var(--shadow-color),
+    4px 4px 10px var(--shadow_color),
     -4px -4px 10px rgba(255, 255, 255, 0.65);
 }
 

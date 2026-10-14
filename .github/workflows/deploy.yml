@@ -52,6 +52,9 @@ jobs:
         # 两道都用退出码报错（1 = 有问题），所以这里不需要额外判断。
         run: npm run check:i18n
 
+      - name: 静态守卫（CSS 变量）
+        run: npm run check:css-vars
+
       - name: Install dependencies
         run: npm ci
 

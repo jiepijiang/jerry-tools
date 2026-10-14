@@ -437,7 +437,7 @@ async function doSubmit() {
 
 .seg-item.active {
   background-color: var(--item_hover_color);
-  box-shadow: 0 2px 6px var(--shadow-color);
+  box-shadow: 0 2px 6px var(--shadow_color);
   color: var(--accent-text);
   font-weight: 500;
 }
@@ -462,7 +462,7 @@ async function doSubmit() {
 
 .site-card:hover {
   background-color: var(--item_hover_color);
-  box-shadow: 0 10px 24px -6px var(--shadow-color);
+  box-shadow: 0 10px 24px -6px var(--shadow_color);
   transform: translateY(-3px);
 }
 

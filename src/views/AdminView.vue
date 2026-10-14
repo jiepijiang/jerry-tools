@@ -608,7 +608,7 @@ async function sendReply() {
 
 .tab.active {
   background-color: var(--item_hover_color);
-  box-shadow: 0 2px 6px var(--shadow-color);
+  box-shadow: 0 2px 6px var(--shadow_color);
   color: var(--accent-text);
   font-weight: 500;
 }

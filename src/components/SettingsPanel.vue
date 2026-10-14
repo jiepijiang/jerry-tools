@@ -1029,7 +1029,7 @@ async function copyShare() {
 
 .seg-item.active {
   background-color: var(--item_hover_color);
-  box-shadow: 0 2px 6px var(--shadow-color);
+  box-shadow: 0 2px 6px var(--shadow_color);
   color: var(--accent-text);
   font-weight: 500;
 }
@@ -1250,7 +1250,7 @@ async function copyShare() {
 }
 
 .fb-item-body {
-  color: var(--text_color);
+  color: var(--main_text_color);
   font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
