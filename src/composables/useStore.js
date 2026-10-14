@@ -14,7 +14,8 @@ import { supabaseAdapter } from '@/data/adapters/cloud'
 import { supabaseConfigured } from '@/data/supabase'
 import { storageKeys } from '@/data/options'
 import { seedBookmarks, seedCategories } from '@/data/seed'
-import { seedSites } from '@/data/seed-discover'
+// ⚠️ `seed-discover` 是**动态 import**（见 `readSites()`），故意不在这里引入 ——
+//    377 条发现页数据 90.5KB，只有发现页用得上，不该让每个访客都下载。
 import { replyFeedback, submitFeedback } from '@/data/feedback'
 import { buildTree, bookmarkKey, clone, flattenTree, formatDate, normalizeUrl, uid } from '@/utils/helpers'
 
@@ -346,6 +347,23 @@ async function seedIfEmpty() {
     const action = decide(st)
     if (action === 'use') return st.value
     if (action === 'seed') {
+      /*
+       * 🔴 `seedSites` 用**动态 import**，不是顶层 import（2026-10-14）。
+       *
+       * 377 条发现页数据打包后 90.5KB raw / 17KB gzip，而它**只有发现页用**。
+       * 顶层 import 会把它并进主包、并在 index.html 里被 `modulepreload` ——
+       * 于是**每一个访客**（哪怕只打开首页看自己的书签）都要为它买单。
+       *
+       * 改动态之后：
+       *   · 回访访客（本地已有 `jt:sites`）→ 上面 `action === 'use'` 就返回了，
+       *     **根本不会加载这个 chunk**；
+       *   · 首次访客 → 走到这里才加载。它不再是 preload，会多一次往返，
+       *     但**只发生一次**，换来的是所有人平时都不下载它；
+       *   · 云端模式的未登录访客同理（`decide()` 返回 `use`）。
+       *
+       * ⚠️ 别为了「省掉那一次往返」把它改回顶层 import —— 那正是要修的东西。
+       */
+      const { seedSites } = await import('@/data/seed-discover')
       const fresh = clone(seedSites)
       if (!isCloudActive()) await persist(storageKeys.sites, fresh)
       return fresh

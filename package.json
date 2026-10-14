@@ -18,7 +18,8 @@
     "probe:footer": "node scripts/probe-footer.mjs",
     "probe:seed": "node scripts/probe-seed-urls.mjs",
     "probe:seed-icons": "node scripts/probe-seed-icons.mjs",
-    "probe:seed-render": "node scripts/probe-seed-icons-render.mjs"
+    "probe:seed-render": "node scripts/probe-seed-icons-render.mjs",
+    "probe:discover-lazy": "node scripts/probe-discover-lazy.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",
