@@ -108,14 +108,34 @@ async function typeAndMeasure(selector, text) {
 }
 
 const ROUTES = [
-  ['发现页', 'discover', '.dc-tools .search input'],
-  ['图标管理', 'icon-management', '.mini-search input'],
+  ['发现页', 'discover', '.dc-tools .search input', false],
+  // 第 4 项 = 需要 admin。见下面循环里的说明。
+  ['图标管理', 'icon-management', '.mini-search input', true],
 ]
 
-for (const [name, p, sel] of ROUTES) {
+for (const [name, p, sel, needsAdmin] of ROUTES) {
   await page.goto(url(p), { waitUntil: 'domcontentloaded' })
   await waitMounted()
   await sleep(4000)
+
+  /*
+   * ⚠️ `/icon-management` 有 `meta.requiresAdmin`，守卫会把非 admin
+   *    **重定向回首页**（`router/index.js` 的 `beforeEach`）。这时目标选择器
+   *    永远不存在，直接去点就是干等 30 秒超时 —— 而且报错完全指不到权限上，
+   *    看着像「页面坏了」。
+   *
+   * 实测（2026-10-26）：探针账号 `jt-transfer-probe@jerry.tools` **不是 admin**；
+   * 先访问首页 / 发现页「热身」也一样被踢，所以不是会话没恢复的问题。
+   *
+   * 如实跳过，别假装测过。这一页和发现页渲染的是同一批 377 条卡片，
+   * 交互成本可以参考上面发现页那组数据。
+   */
+  if (needsAdmin && new URL(page.url()).pathname !== new URL(url(p)).pathname) {
+    console.log(`${name}`)
+    console.log(`  ⏭️ 跳过：需要 admin 账号（被守卫重定向到 ${new URL(page.url()).pathname}）`)
+    console.log(`     探针账号不是 admin；同结构的发现页数据见上。\n`)
+    continue
+  }
 
   const nodes = await page.evaluate(() => document.getElementsByTagName('*').length)
   const cards = await page.evaluate(() => document.querySelectorAll('.site-card, .icon-card').length)

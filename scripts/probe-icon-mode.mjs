@@ -42,6 +42,7 @@
 import {
   ICON_MODES,
   extractIconHref,
+  fallbackIconFor,
   faviconOf,
   iconSrcFor,
   isUsableIcon,
@@ -303,6 +304,35 @@ check(
     'https://jiepijiang.github.io/jerry-site/',
   ).includes('/jerry-site/'),
 )
+
+/* ── 【10】fallbackIconFor：图标**加载失败**后的第二候选 ─────────────
+ *
+ * 为什么值得单独测：这段逻辑决定「坏链能不能自愈」，
+ * 而它的**反面**（什么时候**不该**回落）比正面更重要 —— 判错会无限重试。
+ *
+ * 双向覆盖（防退化成常量），实测过：
+ *   · 恒返回 ''    → 第 1、2、7、8 条红；
+ *   · 忽略 src 恒返回 guess → 第 3、4 条红
+ *     （5、6 不会红 —— pageUrl 非法时 `new URL` 抛错，仍然返回 ''）。
+ */
+const FALLBACK_CASES = [
+  ['https://a.io/bad.png', 'https://a.io/page', 'https://a.io/favicon.ico', '常规：坏链 → 页面 origin 的兜底'],
+  ['https://cdn.other.io/i.png', 'https://a.io/page', 'https://a.io/favicon.ico', '图标在别的域 → 回落到**页面**的 origin，不是图标的'],
+  ['https://a.io/favicon.ico', 'https://a.io/page', '', 'src 本身就是兜底地址 → 不再试（否则无限循环）'],
+  ['', 'https://a.io/page', '', 'src 为空 → 没有可试的'],
+  ['https://a.io/bad.png', '', '', 'pageUrl 为空 → 推导不出来'],
+  ['https://a.io/bad.png', ':::', '', 'pageUrl 非法 → 不瞎猜'],
+  ['https://a.io/bad.png', 'a.io/page', 'https://a.io/favicon.ico', 'pageUrl 省略协议也能推导'],
+  ['https://a.io/bad.png', 'https://a.io:8443/page', 'https://a.io:8443/favicon.ico', '保留非默认端口'],
+]
+const fbFails = []
+FALLBACK_CASES.forEach(([src, page, want, why], i) => {
+  const got = fallbackIconFor(src, page)
+  if (got !== want) {
+    fbFails.push(`#${i + 1} ${why}\n       期望 ${JSON.stringify(want)}，实际 ${JSON.stringify(got)}`)
+  }
+})
+check(`【10】fallbackIconFor 的 ${FALLBACK_CASES.length} 个用例`, fbFails.length === 0, fbFails.join('\n     '))
 
 /* ------------------------------------------------------------------ */
 

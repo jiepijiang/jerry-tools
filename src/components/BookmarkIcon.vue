@@ -9,7 +9,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import { gradientFor } from '@/data/themeColors'
-import { initialOf } from '@/utils/helpers'
+import { fallbackIconFor, initialOf } from '@/utils/helpers'
 import { settings } from '@/composables/useSettings'
 
 const props = defineProps({
@@ -39,11 +39,29 @@ const emit = defineEmits(['load', 'error'])
 const failed = ref(false)
 const loaded = ref(false)
 
+/** 已经换过一次兜底地址没有。只换一次 —— 兜底自己失败就认命，否则会来回打。 */
+const triedFallback = ref(false)
+
+/**
+ * `src` 加载失败时的**第二候选**：站点 origin 的 `/favicon.ico`。
+ *
+ * 规则、以及「什么时候不该再试」全在 `fallbackIconFor` 里 —— 那是纯函数，
+ * CI 的零依赖探针可以直接测它（组件状态测不了，纯函数能测）。
+ *
+ * 兜底地址从 `hashKey` 推导 —— 调用方本来就都传了 url（渐变色哈希用），
+ * 所以这里不需要新增 prop，也**不用改任何调用点**。
+ */
+const fallbackSrc = computed(() => fallbackIconFor(props.src, props.hashKey))
+
+/** 真正交给 `<img>` 的地址：第一次加载失败后换成兜底地址。 */
+const displaySrc = computed(() => (triedFallback.value ? fallbackSrc.value : props.src))
+
 watch(
   () => props.src,
   () => {
     failed.value = false
     loaded.value = false
+    triedFallback.value = false
   },
 )
 
@@ -53,11 +71,23 @@ function onLoad() {
 }
 
 function onError() {
+  /*
+   * 还有一次机会：换成兜底地址重试。
+   *
+   * ⚠️ 这一次**不** emit('error') —— 对调用方来说图还没到「失败」那一步。
+   *    弹窗靠这个事件显示「没抓到，将显示首字母」，提前报会把
+   *    「正在换地址重试」说成「没抓到」。
+   */
+  if (!triedFallback.value && fallbackSrc.value) {
+    triedFallback.value = true
+    loaded.value = false
+    return
+  }
   failed.value = true
   emit('error')
 }
 
-const showImage = computed(() => !!props.src && !failed.value)
+const showImage = computed(() => !!displaySrc.value && !failed.value)
 
 const initial = computed(() => initialOf(props.name))
 
@@ -81,7 +111,7 @@ const style = computed(() => ({
     <img
       v-if="showImage"
       :class="{ loaded }"
-      :src="src"
+      :src="displaySrc"
       :alt="name"
       :loading="lazy ? 'lazy' : 'eager'"
       referrerpolicy="no-referrer"

@@ -168,6 +168,33 @@ export function faviconOf(url, custom) {
   }
 }
 
+/**
+ * 图标**加载失败**时的第二候选地址：站点 origin 的 `/favicon.ico`。
+ *
+ * 为什么需要：`isUsableIcon()` 只校验地址**格式**（https、非第三方），
+ * 不校验**能不能加载**。数据里躺着格式合格但 404 的地址时
+ * （站点改版、反爬、早期种子里抄错的路径），`<img>` 直接失败 → 字母块，
+ * **哪怕这个站点自己的 `/favicon.ico` 明明是通的**。
+ *
+ * 返回 `''` = 「不值得再试」，三种情况：
+ *   · `src` 为空 —— 压根没图；
+ *   · `src` 本来就是那个兜底地址 —— 再试就是自己，会无限循环；
+ *   · `pageUrl` 不是合法 URL —— 推导不出来，也不该瞎猜。
+ *
+ * ⚠️ 只返回**一个**候选，不负责重试。重试由 `BookmarkIcon` 管
+ *    （它要知道「已经试过一次了」，那是组件状态，不是纯函数的事）。
+ */
+export function fallbackIconFor(src, pageUrl) {
+  const s = String(src || '').trim()
+  if (!s) return ''
+  try {
+    const guess = `${new URL(normalizeUrl(pageUrl)).origin}/favicon.ico`
+    return s === guess ? '' : guess
+  } catch {
+    return ''
+  }
+}
+
 /* =========================================================================
    图标来源（iconMode）
    ========================================================================= */

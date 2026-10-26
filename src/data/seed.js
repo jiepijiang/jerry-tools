@@ -18,11 +18,18 @@
    1 个是**站点自己的缺陷**（花瓣网的 `/favicon.ico` 返回结构损坏的 ICO，
    请求 200 但 Chromium 拒绝解码，连 `requestfailed` 都不触发）。
 
-   拿不到图标的 6 条**有意留空**，由 `faviconOf()` 回落（卡片显示首字母块）：
+   拿不到图标的 6 条**有意留空**，交给渲染层兜底（入口是 `iconSrcFor`）：
      Dribbble（图标 404）、Coolors（403 反爬）、npm（只有 16x16，太小）、
      哔哩哔哩（本机探针连不上，站点本身正常）、
      PDF24（其 /favicon.ico 能回落，写死反而多一个常量）、
      花瓣网（ICO 损坏，见上）。
+
+   ⚠️ **留空 ≠ 一定显示首字母块**（2026-10-14 起）。书签走 `iconSrcFor(item)`，
+      favicon 模式会**先读页面 HTML 抓 `<link rel="icon">`**，抓不到才回落到
+      `origin/favicon.ico`，两者都失败才由 `BookmarkIcon` 显示首字母块。
+      所以上面这 6 条实际可能显示出站点声明的真图标 —— PDF24 和 npm 的
+      `/favicon.ico` 本来就是通的，它们**不会**显示字母块。
+      真正的字母块是「站点确实没有可用图标」的那一类（404 / 403 反爬 / ICO 损坏）。
 
    ⚠️ **YouTube 的图标带构建 hash**（`/s/desktop/95e3a3fe/img/favicon_144x144.png`）。
       它的 `/favicon.ico` 只有 16x16，26px 的卡片上会糊。这个 hash 路径是
@@ -101,9 +108,12 @@ export const seedBookmarks = [
   { id: 'tl-2', categoryId: 'tools', name: 'Excalidraw', url: 'https://excalidraw.com', description: '手绘风格白板工具', icon: 'https://excalidraw.com/apple-touch-icon.png', sortOrder: 1 },
   /**
    * ⚠️ 历史 id（`SEED_ADDITIONS` v3 登记过），**不要改**。
-   * icon 留空是有意的：`faviconOf()` 会回落到
-   * `https://tools.pdf24.org/favicon.ico`（实测 200，但是 143 KB 的 ico）。
-   * 写死同一个地址效果一样，所以不写 —— 少一个要维护的常量。
+   * icon 留空是有意的，但理由 2026-10-14 之后变了：
+   *   · 留空（favicon 模式）→ **先读 HTML 抓站点声明的真图标**，抓不到才回落
+   *     `https://tools.pdf24.org/favicon.ico`（实测 200，但是 143 KB 的 ico）。
+   *   · 写死同一个地址 → **固定**用那个 143 KB 的 ico，反而**阻止**用真图标
+   *     （`iconSrcFor` 只在 favicon 模式下去解析 HTML，custom 模式直接用给定地址）。
+   * 所以「写死效果一样」已经不成立 —— 留空更好，不只是为了少一个常量。
    */
   { id: 'b24', categoryId: 'tools', name: 'PDF24 Tools', url: 'https://tools.pdf24.org/zh/', description: '免费在线 PDF 工具箱', sortOrder: 2 },
   { id: 'tl-4', categoryId: 'tools', name: 'TinyPNG', url: 'https://tinypng.com', description: '图片无损压缩', icon: 'https://tinypng.com/images/apple-touch-icon.png', sortOrder: 3 },
