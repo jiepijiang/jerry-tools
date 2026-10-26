@@ -24,10 +24,20 @@
 
    ── 缓存策略 ──────────────────────────────────────────────────────
 
-   同一个 URL 在一次会话里最多发一次请求：
-     · 成功的（拿到了地址）**永久缓存**；
-     · 失败的（没声明 / 没 CORS / 超时）只缓存 60 秒 ——
-       否则一次网络抖动会把某个站点在这一整次会话里钉死成「没图标」。
+   两层：
+
+   1. **内存**（本次会话）：同一个 URL 最多发一次请求
+        · 成功的（拿到了地址）**永久缓存**；
+        · 失败的（没声明 / 没 CORS / 超时）只缓存 60 秒 ——
+          否则一次网络抖动会把某个站点在这一整次会话里钉死成「没图标」。
+
+   2. **localStorage**（跨会话，2026-10-26 加）：失败结果记 24 小时
+        · 为什么需要：第 1 层刷新就忘，而 CORS 拦截是**确定性**的 ——
+          不带 `access-control-allow-origin` 的站点每次刷新都必然失败一次，
+          console 里就是一片红字。实测首页每次加载 5 条。
+        · 为什么是 24 小时：`TypeError: Failed to fetch` **区分不了**
+          「CORS 拦截」和「网络断开」，TTL 太长会把临时故障的站点钉死。
+        · 只记失败；成功的结果已经写进书签的 `icon` 字段了。
    ========================================================================= */
 
 import { extractIconHref, normalizeUrl } from '@/utils/helpers'
@@ -46,6 +56,76 @@ const CACHE = new Map()
 /** url → Promise<string>，同一个 url 并发只发一次请求 */
 const PENDING = new Map()
 
+/* ── 失败结果的**跨会话**缓存 ────────────────────────────────────────
+ *
+ * 为什么需要：上面 `CACHE` 的 60 秒只活在一次会话里，**刷新就忘**。
+ * 而有些站点是**确定性**解析不到的 —— 最典型的是不带
+ * `access-control-allow-origin` 的站点（抽样 8 个常见站点 0 个带），
+ * 跨域 `fetch` 一律被浏览器拦掉。
+ *
+ * 后果（2026-10-26 实测）：每次打开首页，`backfillIconSrc` 都会为
+ * seed 里那几条留空的条目重发请求，浏览器在 console 打一片
+ * 「blocked by CORS policy」红字 —— **每次刷新都打**，登录页也一样。
+ *
+ * ⚠️ 区分不了「CORS 拦截」和「网络断开」—— 两者在 JS 里都是
+ *    `TypeError: Failed to fetch`。所以 TTL 不能太长：一次断网不该把
+ *    某个站点钉死一星期。24 小时是折中 —— 确定性失败的站点每天最多重试一次。
+ *
+ * ⚠️ 只记「失败」。成功的地址本来就写进了书签的 `icon` 字段（回填），
+ *    不需要在这里再存一份。
+ */
+const MISS_KEY = 'jt:iconMiss'
+const MISS_TTL_MS = 24 * 60 * 60 * 1000
+/** 上限。超出按时间戳删最老的 —— 防止 localStorage 被无限撑大。 */
+const MISS_LIMIT = 400
+
+/** 懒加载的镜像，避免每次解析都 `JSON.parse` 一遍。 */
+let MISS = null
+
+function misses() {
+  if (MISS) return MISS
+  try {
+    const raw = localStorage.getItem(MISS_KEY)
+    const obj = raw ? JSON.parse(raw) : {}
+    MISS = obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {}
+  } catch {
+    /* 没有 localStorage（SSR / 隐私模式）或内容坏了 —— 退化成不持久化 */
+    MISS = {}
+  }
+  return MISS
+}
+
+function persistMisses() {
+  try {
+    localStorage.setItem(MISS_KEY, JSON.stringify(MISS))
+  } catch {
+    /* 配额满 / 隐私模式：功能不受影响，只是下次会话会重试 */
+  }
+}
+
+function isKnownMiss(url) {
+  const at = misses()[url]
+  return typeof at === 'number' && Date.now() - at < MISS_TTL_MS
+}
+
+function markMiss(url) {
+  const m = misses()
+  m[url] = Date.now()
+  const keys = Object.keys(m)
+  if (keys.length > MISS_LIMIT) {
+    keys.sort((a, b) => m[a] - m[b])
+    for (const k of keys.slice(0, keys.length - MISS_LIMIT)) delete m[k]
+  }
+  persistMisses()
+}
+
+function clearMiss(url) {
+  const m = misses()
+  if (!(url in m)) return
+  delete m[url]
+  persistMisses()
+}
+
 /**
  * 读一个 URL 的「站点声明图标」，读不到返回 `''`。**永不抛错。**
  *
@@ -59,12 +139,17 @@ export async function resolveSiteIcon(pageUrl) {
   const hit = CACHE.get(target)
   if (hit && (hit.value || Date.now() - hit.at < NEGATIVE_TTL_MS)) return hit.value
 
+  // 上次（跨会话）就解析不到 → **不再发请求**。见 MISS_KEY 那段注释。
+  if (isKnownMiss(target)) return ''
+
   const inflight = PENDING.get(target)
   if (inflight) return inflight
 
   const p = fetchIconHref(target)
     .then((value) => {
       CACHE.set(target, { at: Date.now(), value })
+      if (value) clearMiss(target)
+      else markMiss(target)
       return value
     })
     .finally(() => PENDING.delete(target))
@@ -73,10 +158,16 @@ export async function resolveSiteIcon(pageUrl) {
   return p
 }
 
-/** 清空缓存。**只给测试用** —— 生产代码里没有「重新解析一次」的语义。 */
+/** 清空缓存（内存 + 跨会话的失败记录）。**只给测试用** —— 生产代码里没有「重新解析一次」的语义。 */
 export function clearSiteIconCache() {
   CACHE.clear()
   PENDING.clear()
+  MISS = null
+  try {
+    localStorage.removeItem(MISS_KEY)
+  } catch {
+    /* 没有 localStorage —— 本来就没存 */
+  }
 }
 
 /* ------------------------------------------------------------------ 内部 */
