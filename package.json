@@ -23,7 +23,8 @@
     "probe:seed-render": "node scripts/probe-seed-icons-render.mjs",
     "probe:discover-lazy": "node scripts/probe-discover-lazy.mjs",
     "probe:icon-mode": "node scripts/probe-icon-mode.mjs",
-    "probe:icon-source": "node scripts/probe-icon-source.mjs"
+    "probe:icon-source": "node scripts/probe-icon-source.mjs",
+    "probe:mobile": "node scripts/probe-mobile-layout.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.1",

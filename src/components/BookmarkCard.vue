@@ -567,6 +567,28 @@ function onRelease() {
   transform: translate(calc(-50% + var(--tip-shift, 0px)), 0);
 }
 
+/*
+ * 没有 hover 能力的设备（手机 / 平板）**不渲染**提示框。
+ *
+ * 为什么必须显式隐藏：提示框靠 `.bm-card:hover` 才变 `opacity: 1`，
+ * 这类设备永远没有 hover —— 它只会以 `opacity: 0` 的状态**留在布局里**。
+ * 而 `clampTooltip()` 是挂在 `mouseenter` 上的（见 script 里的注释），
+ * 移动端永远不触发 → 位置永远没被夹回视口。
+ *
+ * 实测（2026-10-26，375×812 + touch）：3 个提示框 right=386/387/377，
+ * 把 `documentElement.scrollWidth` 撑到 388 —— **整页多出 13px 横向滚动**，
+ * 手指能左右拖。发现页没有提示框，所以那边是 0。
+ *
+ * ⚠️ 用 `(hover: none)` 而不是 `(max-width: 760px)`：桌面端窗口拖窄到
+ *    375px 时鼠标仍在，提示框**有用**（hover 时 clampTooltip 会把它夹回来）。
+ *    判据要的是「有没有 hover 能力」，不是「窗口窄不窄」。
+ */
+@media (hover: none) {
+  .bm-tooltip {
+    display: none;
+  }
+}
+
 .tip-head strong {
   color: var(--main_text_color);
   font-size: 12.5px;
