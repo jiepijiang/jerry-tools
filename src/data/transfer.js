@@ -103,7 +103,15 @@ export function mergeCategories(cloudRows, localRows) {
  */
 export function mergeBookmarks(cloudRows, localRows) {
   const rows = [...(cloudRows || [])]
-  const byId = new Set(rows.map((b) => b.id))
+  /*
+   * ⚠️ 只收**有效** id。`Set` 会把 `undefined` 也当成一个值 ——
+   *    原写法无条件 `byId.add(b.id)`，于是「两条都缺 id」时：
+   *    第一条把 `undefined` 塞进去，第二条 `byId.has(undefined)` 命中，
+   *    被当成「id 撞车」静默跳过。
+   *    实测（`probe-transfer.mjs`【5】）：两条缺 id 的书签只进了一条。
+   */
+  const validId = (id) => id != null && id !== ''
+  const byId = new Set(rows.map((b) => b.id).filter(validId))
   const byUrl = new Set(rows.map((b) => bookmarkKey(b.url)).filter(Boolean))
   let added = 0
   let skipped = 0
@@ -113,11 +121,12 @@ export function mergeBookmarks(cloudRows, localRows) {
       continue
     }
     const u = bookmarkKey(b.url)
-    if (byId.has(b.id) || byUrl.has(u)) {
+    const hasId = validId(b.id)
+    if ((hasId && byId.has(b.id)) || byUrl.has(u)) {
       skipped++
       continue
     }
-    byId.add(b.id)
+    if (hasId) byId.add(b.id)
     byUrl.add(u)
     rows.push(b)
     added++

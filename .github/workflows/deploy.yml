@@ -52,7 +52,7 @@ jobs:
         # 两道都用退出码报错（1 = 有问题），所以这里不需要额外判断。
         run: npm run check:i18n
 
-      - name: 静态守卫（CSS 变量 / 图标来源）
+      - name: 静态守卫（CSS 变量 / 图标来源 / 数据搬运）
         # 同样**零依赖**（只读 src/ 源码），放在 npm ci 之前 —— 有问题别浪费一次安装。
         #
         #   check:css-vars   引用了不存在的 CSS 变量时，浏览器**不报错**，
@@ -62,7 +62,12 @@ jobs:
         #                    —— 那 7 个元素的 box-shadow 一直是空的。
         #   probe:icon-mode  三种图标来源（首字母 / 网站图标 / 自定义）的语义，
         #                    以及对**存量数据**的等价性（换渲染调用点不能改老数据的显示）。
-        run: npm run check:css-vars && npm run probe:icon-mode
+        #   probe:transfer   「本机 ↔ 云端」数据搬运的合并逻辑（transfer.js）。
+        #                    这是全项目唯一会**丢用户数据**的纯逻辑，而它原来的
+        #                    验证脚本是一次性的 `/tmp/jerry-sb/transfer-verify.mjs`
+        #                    —— 早就没了，等于长期裸奔。加进来的第一跑就抓到
+        #                    「两条缺 id 的书签只进一条」（Set 把 undefined 当 id）。
+        run: npm run check:css-vars && npm run probe:icon-mode && npm run probe:transfer
 
       - name: Install dependencies
         run: npm ci

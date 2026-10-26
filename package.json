@@ -24,6 +24,7 @@
     "probe:discover-lazy": "node scripts/probe-discover-lazy.mjs",
     "probe:icon-mode": "node scripts/probe-icon-mode.mjs",
     "probe:icon-source": "node scripts/probe-icon-source.mjs",
+    "probe:transfer": "node scripts/probe-transfer.mjs",
     "probe:mobile": "node scripts/probe-mobile-layout.mjs"
   },
   "dependencies": {
