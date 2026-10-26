@@ -10,6 +10,9 @@
       如果表不在 `supabase_realtime` 发布里，状态照样是 `SUBSCRIBED`，
       然后**一条事件都收不到** —— 实测连一个根本不存在的表名都是 `SUBSCRIBED`。
       所以别拿订阅状态当验证，唯一可靠的判据是「写一行 → 看有没有事件」。
+      👉 这条判据由 `scripts/probe-realtime-live.mjs` 执行（2026-10-26，24 条断言）：
+         两个浏览器上下文登同一账号，A 直接 REST 插/删一行，断言 B 不刷新就跟着变。
+         在这之前它只存在于注释里 —— 等于没人知道线上到底通不通。
 
    2. **自己写的东西会被服务端原样回推一份。**
       不处理的话每次写都要白刷一遍 UI（列表重排、输入框失焦、动画重放）。
@@ -64,7 +67,20 @@ export const realtimeStatus = reactive({
   applied: 0,
 })
 
-/** 重连退避上限：1s → 2s → 4s → … → 最多 30s，试满就放弃。 */
+/**
+ * 重连退避上限：1s → 2s → 4s → … → 最多 30s，试满 6 次就不再自己重试。
+ *
+ * ⚠️ 「不再自己重试」**不等于同步永久死掉** —— 2026-10-26 实测过：
+ *    放弃之后日志里会紧跟着一条 `全量重读（重连）`。救回来的是
+ *    **supabase-js 自己的重连**（客户端内部一直按自己的退避重连 socket），
+ *    它重连成功会把 `SUBSCRIBED` 再抛一次，被下面的 `onStatus` 接住，
+ *    于是状态回绿、`resync` 照跑。
+ *
+ *    换句话说这层退避是**叠加在库自带的之上**的，作用是
+ *    「我们主动重建 channel」这条路有上限，别在服务端真挂时白刷日志；
+ *    它不是唯一命脉。**别照着「放弃 = 死了」去改这里。**
+ *    验证见 `scripts/probe-realtime-live.mjs` 第 ⑥ 节（故意断线 100 秒再放行）。
+ */
 const MAX_RETRY = 6
 
 let channel = null
@@ -290,7 +306,9 @@ function scheduleRetry() {
   if (!active || retryTimer || channelBroken) return
   if (retry >= MAX_RETRY) {
     realtimeStatus.error = 'reconnect_giveup'
-    console.warn('[realtime] 重连次数用尽，实时同步停用。刷新页面可重试。')
+    // ⚠️ 措辞别写成「实时同步停用」—— 见 MAX_RETRY 的注释：库自己还会重连，
+    //    实测这之后通常几秒内就会收到 SUBSCRIBED 并自动恢复。
+    console.warn('[realtime] 自己不再重建 channel，交给底层客户端重连（若久不恢复再刷新页面）')
     return
   }
   const delay = Math.min(30000, 1000 * 2 ** retry)
