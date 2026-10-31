@@ -71,7 +71,13 @@ jobs:
         #                    实时变更的判决逻辑（realtimePatch.js）：回声抑制、
         #                    四种 kind 的分支、收藏计数不重复。判错一次的后果是
         #                    「每次写都白刷一遍 UI」或「收藏数重复 +1」，都是静默的。
-        run: npm run check:css-vars && npm run probe:icon-mode && npm run probe:transfer && npm run probe:realtime-patch
+        #   probe:realtime-wiring
+        #                    「哪些表要同步」被抄在三个地方（SPECS / STATE_TARGET /
+        #                    003-realtime.sql 的 targets），加表时必须一起改。
+        #                    漂移的失败模式**全是静默的**：表没进 publication 时
+        #                    订阅照样报 SUBSCRIBED 却一条事件收不到；漏了
+        #                    STATE_TARGET 则事件到了被直接丢弃、日志里一句都没有。
+        run: npm run check:css-vars && npm run probe:icon-mode && npm run probe:transfer && npm run probe:realtime-patch && npm run probe:realtime-wiring
 
       - name: Install dependencies
         run: npm ci

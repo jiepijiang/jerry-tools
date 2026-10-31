@@ -51,6 +51,23 @@ export const STATE_TARGET = {
 }
 
 /**
+ * 这一行是不是当前用户的。
+ *
+ * 过滤列配错时的第二道防线（第一道是 RLS 的 `user_id = auth.uid()`）。
+ *
+ * ⚠️ 这里的判据**必须**和 `adapters/cloud.js` 里的
+ *    `filterColumn: noUserCol ? 'id' : 'user_id'` 完全一致。
+ *    不一致的后果是全静默的：服务端按 `id=eq.<uid>` 推过来，
+ *    这里却去比 `row.user_id === uid`（undefined）→ 恒 false →
+ *    **每一条事件都被丢掉**，而订阅状态一直是绿的。
+ *    两边对齐由 `scripts/probe-realtime-wiring.mjs` 第 4 节钉住。
+ */
+export function belongsToMe(key, row, uid) {
+  if (!row || !uid) return false
+  return key === storageKeys.users ? row.id === uid : row.user_id === uid
+}
+
+/**
  * 两个本地模型对象在「应用已经认识的字段」上是否等价。
  *
  * ⚠️ **只比 `a` 的键**，而且这一条是整个回声抑制的地基。

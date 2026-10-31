@@ -45,13 +45,13 @@ read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loa
 
 | 层 | 什么时候跑 | 有哪些 |
 | --- | --- | --- |
-| **静态守卫（进 CI）** | **CI 每次 push 自动跑**，且在 `npm ci` 之前 | `check-i18n-parity.mjs` · `check-i18n-text.mjs` · `check-meta.mjs` · `check-css-vars.mjs` · `probe-icon-mode.mjs` · `probe-transfer.mjs` · `probe-realtime-patch.mjs` |
+| **静态守卫（进 CI）** | **CI 每次 push 自动跑**，且在 `npm ci` 之前 | `check-i18n-parity.mjs` · `check-i18n-text.mjs` · `check-meta.mjs` · `check-css-vars.mjs` · `probe-icon-mode.mjs` · `probe-transfer.mjs` · `probe-realtime-patch.mjs` · `probe-realtime-wiring.mjs` |
 | **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` · `probe-engine-pop.mjs` · `probe-footer.mjs` · `probe-seed-urls.mjs` · `probe-seed-icons.mjs` · `probe-seed-icons-render.mjs` · `probe-discover-lazy.mjs` · `probe-mobile-layout.mjs` · `probe-realtime-live.mjs` |
-| 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` · `lib/alias-loader.mjs` · `recover-from-transcript.mjs` |
+| 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` · `lib/alias-loader.mjs` · `lib/supabase-stub.mjs` · `recover-from-transcript.mjs` |
 
 > 📌 名字里带 `probe-` **不等于**只能手工跑。分界线是「要不要真浏览器 / 真网络」，
 > 不是文件名 —— `probe-icon-mode` / `probe-transfer` / `probe-realtime-patch`
-> 都是纯函数探针，照样进 CI。
+> / `probe-realtime-wiring` 都是纯函数探针，照样进 CI。
 
 > ⚠️ 曾经还有一个 `seed-lazy.mjs`，**已删**。
 > 它的断言建立在「云端模式不该请求种子数据」这个前提上 —— 而那个前提
@@ -92,6 +92,49 @@ npm run check:i18n        # 两道都跑，任一失败 → 退出码 1
 判别力也自检了（真去改源码验的，不是猜的）：把 `sameLocalObject` 换成
 「比较整个对象」的朴素实现，**红 7 条**；把 `ids` 分支的查重去掉，
 **红 4 条**（其中一条正是「收藏回声 → 不重复计数」）。
+
+### `probe-realtime-wiring.mjs`：三处清单的一致性守卫（2026-10-31）
+
+「哪些表要同步」这份事实被抄在**三个地方**，加表时必须一起改：
+
+| # | 在哪 | 管什么 |
+| --- | --- | --- |
+| ① | `adapters/cloud.js` 的 `SPECS` | 源头：表名 / kind / 主键列 |
+| ② | `realtimePatch.js` 的 `STATE_TARGET` | 事件到了往 state 哪儿放 |
+| ③ | `supabase/migrations/003-realtime.sql` 的 `targets` | 服务端往不往出推 |
+
+漂移的失败模式**全是静默的**，而且本机开发根本发现不了（单设备收不到自己的事件）：
+
+- 只改 ①②、忘改 ③ → 表不在 publication 里。`subscribe()` 照样 `SUBSCRIBED`
+  （连不存在的表名都是），然后一条事件收不到。
+- 只改 ①③、忘改 ② → 事件真推过来了，`applyPatch` 找不到 target 直接 `return false`，
+  界面什么都不动，日志里一句都没有。
+- 三处都改但 kind 抄错 → 事件被当成另一种结构应用，可能不报错地错乱。
+
+**这个文件以前写不出来**：`cloud.js` import 了 `@/data/supabase`，而那个模块第一句就是
+`import.meta.env.VITE_SUPABASE_URL` —— 裸 node 下 `import.meta.env` 是 `undefined`，
+直接 TypeError。所以 `SPECS` 一直测不了。
+
+解法是给 `lib/alias-loader.mjs` 加一条重定向：`@/data/supabase` → `lib/supabase-stub.mjs`。
+**这不是「用假货糊弄测试」** —— 那个模块在 node 下本来就加载不起来，桩是唯一能让它加载的路。
+桩里的 `supabase` 是个 Proxy，任何属性访问都抛一句人话（`then` 除外，否则会被当成 thenable），
+而不是让人在 `Cannot read properties of null` 里猜。
+
+51 条断言，零依赖、几十毫秒。四类：
+
+| 节 | 钉住什么 |
+| --- | --- |
+| 1–2 | `SPECS` ↔ `REALTIME_TABLES` ↔ `STATE_TARGET` **双向**同键、kind 一一映射（`blob → settings` 是唯一不同名的）、`ids`/`map` 必须写 `idColumn` |
+| 3 | SQL 的 `targets` 与代码订阅**双向**相等；连 `if n < 10` 那个自检阈值也一起对（阈值写死了，加表忘了改，自检就变空壳） |
+| 4 | `belongsToMe` ↔ `filterColumn` 必须一致。服务端按 `id=eq.<uid>` 推、客户端却去比 `row.user_id`（undefined）→ 恒 false → **每条事件都被丢掉**，订阅状态还绿着 |
+| 5 | `applyRemoteChange` 快照缺失必须回 `{op:'reload'}` —— 就地建快照会让下次写把云端其余行全判成「已删除」，那是真删数据 |
+
+判别力同样是**改源码验的**：从 SQL 的 `targets` 删掉 `'notes'` → 红 2 条（含阈值那条）；
+从 `STATE_TARGET` 删掉 `visits` → 红 1 条（顺带 `probe-realtime-patch` 红 7 条）；
+去掉 profiles 的 `noUserCol` → 红 2 条（第 4 节那两条，正是「加了一张没有 user_id 列的表」的场景）。
+
+⚠️ 顺带说明：`belongsToMe` 这次从 `useRealtime.js` 挪进了 `realtimePatch.js`（纯函数，
+uid 从参数传）。不挪就测不了 —— 而它恰恰是「认错人」那一层的唯一判据。
 
 
 ## 端到端探针怎么跑

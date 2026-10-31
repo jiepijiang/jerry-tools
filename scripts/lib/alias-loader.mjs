@@ -23,6 +23,11 @@
 
    ⚠️ 必须是**动态** import：静态 import 会在 `register()` 执行前就被解析掉，
       那时候 hook 还没装。
+
+   2026-10-31 追加：除了 `@/` 别名，这里还把 `@/data/supabase` 重定向到
+   `lib/supabase-stub.mjs`。理由见下面 `STUBBED` 的注释 —— 简单说，
+   那个模块在裸 node 下**本来就加载不起来**（`import.meta.env` 是 undefined），
+   桩是唯一能让 `adapters/cloud.js` 被加载的路。
    ========================================================================= */
 
 import { existsSync } from 'node:fs'
@@ -32,7 +37,30 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 /** 项目根下的 `src/`。本文件在 `scripts/lib/`，所以往上两级。 */
 const SRC_DIR = fileURLToPath(new URL('../../src/', import.meta.url))
 
+const SUPABASE_STUB = new URL('./supabase-stub.mjs', import.meta.url).href
+
+/**
+ * 这两个模块**在裸 node 下本来就加载不起来**，所以重定向到桩不算「用假货」：
+ *
+ *   · `@/data/supabase` —— 第一句就是 `import.meta.env.VITE_SUPABASE_URL`，
+ *     `import.meta.env` 在 node 里是 `undefined` → TypeError。
+ *   · `@supabase/supabase-js` —— 真库，几百 KB，探针用不上；
+ *     桩已经把整个 `@/data/supabase` 换掉了，正常路径根本走不到这里，
+ *     留着是防「有人直接 import 它」。
+ *
+ * 有了这一步，`src/data/adapters/cloud.js`（全项目最权威的表清单 `SPECS`
+ * 就在里面）终于能被 node 加载 —— 见 `probe-realtime-wiring.mjs`。
+ */
+const STUBBED = {
+  '@/data/supabase': SUPABASE_STUB,
+  '@supabase/supabase-js': SUPABASE_STUB,
+}
+
 export async function resolve(specifier, context, nextResolve) {
+  if (STUBBED[specifier]) {
+    return { url: STUBBED[specifier], shortCircuit: true }
+  }
+
   if (specifier.startsWith('@/')) {
     const base = path.join(SRC_DIR, specifier.slice(2))
     for (const cand of [base, `${base}.js`, path.join(base, 'index.js')]) {

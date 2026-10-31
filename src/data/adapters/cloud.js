@@ -88,8 +88,14 @@ function localToRow(obj, userId) {
  *   - 混着写 → 整批 400
  *   - 缺的字段 → `null value in column "icon" violates not-null constraint`
  * 所以这里按列清单把每行补齐到同一组键，缺的用列默认值。
+ *
+ * ⚠️ 导出是**给一致性守卫用的**（`scripts/probe-realtime-wiring.mjs`）：
+ *    这张表是「哪些表要同步」的唯一源头，`REALTIME_TABLES` 由它推出，
+ *    `realtimePatch.js` 的 `STATE_TARGET` 和 `003-realtime.sql` 的 `targets`
+ *    都得跟它对齐。三处漂移的失败模式全是**静默**的（事件照收、界面不动），
+ *    所以必须有脚本盯着。别在别处 import 它去做业务判断。
  */
-const SPECS = {
+export const SPECS = {
   [storageKeys.categories]: {
     table: 'categories',
     kind: 'rows',

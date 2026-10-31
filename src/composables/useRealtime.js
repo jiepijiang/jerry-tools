@@ -29,9 +29,8 @@
 
 import { reactive } from 'vue'
 import { supabase, supabaseConfigured } from '@/data/supabase'
-import { storageKeys } from '@/data/options'
 import { REALTIME_TABLES, applyRemoteChange } from '@/data/adapters/cloud'
-import { applyPatch } from '@/data/realtimePatch'
+import { applyPatch, belongsToMe } from '@/data/realtimePatch'
 import { state, reloadStore, bumpSiteCollects } from '@/composables/useStore'
 import { applyRemoteSettings } from '@/composables/useSettings'
 
@@ -97,14 +96,6 @@ let resyncing = false
  */
 let channelBroken = false
 
-/* ------------------------------------------------------------ 状态判定 */
-
-/** 这一行是不是当前用户的。过滤列配错时的第二道防线（第一道是 RLS）。 */
-function belongsToMe(key, row) {
-  if (key === storageKeys.users) return row.id === currentUid
-  return row.user_id === currentUid
-}
-
 /* -------------------------------------------------------- 应用到 state */
 
 /**
@@ -126,7 +117,7 @@ function handleChange(key, payload) {
   const oldRow = payload.old
 
   // DELETE 的 old 只有主键列，没法判归属 —— 靠 filter + RLS 兜着
-  if (eventType !== 'DELETE' && row && !belongsToMe(key, row)) return
+  if (eventType !== 'DELETE' && row && !belongsToMe(key, row, currentUid)) return
 
   const change = applyRemoteChange(key, eventType, row, oldRow)
   if (!change) return
