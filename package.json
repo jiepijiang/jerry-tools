@@ -25,6 +25,7 @@
     "probe:icon-mode": "node scripts/probe-icon-mode.mjs",
     "probe:icon-source": "node scripts/probe-icon-source.mjs",
     "probe:transfer": "node scripts/probe-transfer.mjs",
+    "probe:realtime-patch": "node scripts/probe-realtime-patch.mjs",
     "probe:realtime": "node scripts/probe-realtime-live.mjs",
     "probe:mobile": "node scripts/probe-mobile-layout.mjs"
   },

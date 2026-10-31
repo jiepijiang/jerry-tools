@@ -31,28 +31,21 @@ import { reactive } from 'vue'
 import { supabase, supabaseConfigured } from '@/data/supabase'
 import { storageKeys } from '@/data/options'
 import { REALTIME_TABLES, applyRemoteChange } from '@/data/adapters/cloud'
+import { applyPatch } from '@/data/realtimePatch'
 import { state, reloadStore, bumpSiteCollects } from '@/composables/useStore'
 import { applyRemoteSettings } from '@/composables/useSettings'
 
 /**
- * storageKey → 落到 state 的哪个字段、按哪种结构应用。
+ * 判决逻辑（`STATE_TARGET` / `sameLocalObject` / `applyPatch`）已经挪到
+ * `src/data/realtimePatch.js` —— 那个文件零外部依赖，能进 CI。
  *
- * ⚠️ `settings` 的 field 是 null —— 它**不在 state 上**，
- *    归 useSettings 的 reactive 对象管，走 applyRemoteSettings 单独处理。
+ * 这里只留「把副作用接到谁身上」这件事：设置归 useSettings、收藏计数归 useStore。
+ * ⚠️ `applyRemoteSettings` 只能改内存 + 刷 `<html>`，**绝不能落盘** ——
+ *    落盘会再触发一次云端写入，于是「收到事件 → 又写一次 → 又收到事件」无限回环。
  */
-const STATE_TARGET = {
-  [storageKeys.categories]: { field: 'categories', kind: 'rows' },
-  [storageKeys.bookmarks]: { field: 'bookmarks', kind: 'rows' },
-  [storageKeys.notes]: { field: 'notes', kind: 'rows' },
-  [storageKeys.submissions]: { field: 'submissions', kind: 'rows' },
-  [storageKeys.feedback]: { field: 'feedback', kind: 'rows' },
-  // profiles：收到的若是自己那行，顺手把 state.session 也同步了，
-  // 否则在另一台设备改了昵称，这台顶栏还是旧的
-  [storageKeys.users]: { field: 'users', kind: 'rows', syncSession: true },
-  [storageKeys.favorites]: { field: 'favorites', kind: 'ids' },
-  [storageKeys.visits]: { field: 'visits', kind: 'map' },
-  [storageKeys.share]: { field: 'share', kind: 'single' },
-  [storageKeys.settings]: { field: null, kind: 'settings' },
+const PATCH_HOOKS = {
+  applySettings: applyRemoteSettings,
+  onFavoriteChange: bumpSiteCollects,
 }
 
 /** 供 UI 显示同步状态。 */
@@ -112,95 +105,17 @@ function belongsToMe(key, row) {
   return row.user_id === currentUid
 }
 
-/** 两个本地模型对象在「应用已经认识的字段」上是否等价。 */
-function sameLocalObject(a, b) {
-  if (!a || !b) return false
-  /**
-   * 只比 `a` 的键。理由：`a` 是 state 里的对象，它的键就是应用在用的字段。
-   * DB 那边可能多出 `created_at` 这类我们从不读的列，
-   * 把它们算进差异的话，自己写的回声会**永远**被判成「变了」，回声抑制直接失效。
-   */
-  for (const k of Object.keys(a)) {
-    const va = a[k] === undefined ? null : a[k]
-    const vb = b[k] === undefined ? null : b[k]
-    if (JSON.stringify(va) !== JSON.stringify(vb)) return false
-  }
-  return true
-}
-
 /* -------------------------------------------------------- 应用到 state */
 
-/** 把一条变更落到 state 上。返回「是否真的改了」（false = 被回声抑制掉了）。 */
+/**
+ * 把一条变更落到 state 上。返回「是否真的改了」（false = 被回声抑制掉了）。
+ *
+ * 真正的判决逻辑在 `@/data/realtimePatch`（纯函数、有 CI 探针钉着），
+ * 这里只是把它和两个副作用接起来 —— 别把逻辑写回这个文件，
+ * 写回来就又测不了了。
+ */
 function applyChange(key, change) {
-  const target = STATE_TARGET[key]
-  if (!target) return false
-
-  if (target.kind === 'settings') {
-    return change.op === 'upsert' ? applyRemoteSettings(change.value) : false
-  }
-
-  const cur = state[target.field]
-  if (cur == null) return false
-
-  switch (target.kind) {
-    case 'rows': {
-      const i = cur.findIndex((x) => x.id === change.id)
-      if (change.op === 'remove') {
-        if (i < 0) return false
-        cur.splice(i, 1)
-        return true
-      }
-      if (i < 0) {
-        cur.push(change.value)
-      } else {
-        if (sameLocalObject(cur[i], change.value)) return false // ← 自己写的回声
-        cur[i] = change.value
-      }
-      if (target.syncSession && state.session?.id === change.value?.id) {
-        state.session = { ...state.session, ...change.value }
-      }
-      return true
-    }
-
-    case 'ids': {
-      const i = cur.indexOf(change.id)
-      if (change.op === 'remove') {
-        if (i < 0) return false
-        cur.splice(i, 1)
-        // 收藏数挂在 discover_sites 上，而那张表不在实时订阅里（全局表，
-        // 订阅它会把每个人的每次浏览都广播出去）—— 所以这里手动跟着动一下。
-        // 放在 return false 之后，所以**自己写的回声不会重复计数**。
-        if (key === storageKeys.favorites) bumpSiteCollects(change.id, -1)
-        return true
-      }
-      if (i >= 0) return false
-      cur.push(change.id)
-      if (key === storageKeys.favorites) bumpSiteCollects(change.id, +1)
-      return true
-    }
-
-    case 'map': {
-      if (change.op === 'remove') {
-        if (!(change.id in cur)) return false
-        delete cur[change.id]
-        return true
-      }
-      if (cur[change.id] === change.value) return false
-      cur[change.id] = change.value
-      return true
-    }
-
-    case 'single': {
-      // 单行表被删 = 回到默认态。这种情况少见，交给重读更稳妥
-      if (change.op === 'remove') return false
-      if (sameLocalObject(cur, change.value)) return false
-      state.share = { ...change.value }
-      return true
-    }
-
-    default:
-      return false
-  }
+  return applyPatch(state, key, change, PATCH_HOOKS)
 }
 
 /* -------------------------------------------------------------- 事件入口 */

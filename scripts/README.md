@@ -45,9 +45,13 @@ read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loa
 
 | 层 | 什么时候跑 | 有哪些 |
 | --- | --- | --- |
-| **`check-*`（静态）** | **CI 每次 push 自动跑** | `check-i18n-parity.mjs` · `check-i18n-text.mjs` |
-| **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` · `probe-engine-pop.mjs` · `probe-footer.mjs` · `probe-seed-urls.mjs` · `probe-seed-icons.mjs` · `probe-seed-icons-render.mjs` |
-| 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` · `recover-from-transcript.mjs` |
+| **静态守卫（进 CI）** | **CI 每次 push 自动跑**，且在 `npm ci` 之前 | `check-i18n-parity.mjs` · `check-i18n-text.mjs` · `check-meta.mjs` · `check-css-vars.mjs` · `probe-icon-mode.mjs` · `probe-transfer.mjs` · `probe-realtime-patch.mjs` |
+| **`probe-*`（端到端）** | **只能手工跑** | `reset-default.mjs` · `perf-audit.mjs` · `interact-audit.mjs` · `sites-source.mjs` · `probe-engine-pop.mjs` · `probe-footer.mjs` · `probe-seed-urls.mjs` · `probe-seed-icons.mjs` · `probe-seed-icons-render.mjs` · `probe-discover-lazy.mjs` · `probe-mobile-layout.mjs` · `probe-realtime-live.mjs` |
+| 工具 | —— | `serve-static.mjs` · `lib/playwright.mjs` · `lib/alias-loader.mjs` · `recover-from-transcript.mjs` |
+
+> 📌 名字里带 `probe-` **不等于**只能手工跑。分界线是「要不要真浏览器 / 真网络」，
+> 不是文件名 —— `probe-icon-mode` / `probe-transfer` / `probe-realtime-patch`
+> 都是纯函数探针，照样进 CI。
 
 > ⚠️ 曾经还有一个 `seed-lazy.mjs`，**已删**。
 > 它的断言建立在「云端模式不该请求种子数据」这个前提上 —— 而那个前提
@@ -56,19 +60,39 @@ read-fail-audit · write-fail-audit · settings-audit · orphan-bookmarks · loa
 > 它会绿，而且会让人以为那件事被守住了。它要验的东西现在由
 > `sites-source.mjs` 用正确的判据覆盖。
 
-**为什么 `probe-*` 进不了 CI**：它们要**真浏览器 + 真 Supabase**
+**为什么端到端 `probe-*` 进不了 CI**：它们要**真浏览器 + 真 Supabase**
 （而登录还得穿过代理）。CI 里没有这些，硬塞进去只会得到一堆假红。
 但这**不**意味着它们可以放 `/tmp` —— 「进不了 CI」和「可以丢」是两件事。
 
-## 静态那两道为什么能进 CI
+## 静态那几道为什么能进 CI
 
-它们零依赖：只读 `src/` 源码 + 直接 `import src/data/i18n.js`
-（那个文件自己不 import 任何东西）。所以放在 `npm ci` **之前**跑 ——
-文案漏了就别浪费一次安装和构建。
+它们零依赖：只读 `src/` 源码 + 直接 `import` 那些**自己不 import 任何东西**的模块
+（`data/i18n.js` / `data/options.js`）。所以放在 `npm ci` **之前**跑 ——
+漏了就别浪费一次安装和构建。
 
 ```bash
 npm run check:i18n        # 两道都跑，任一失败 → 退出码 1
 ```
+
+### `probe-realtime-patch.mjs`：抽出来才测得了（2026-10-31）
+
+实时变更的判决逻辑（`STATE_TARGET` / `sameLocalObject` / `applyPatch`）原来长在
+`useRealtime.js` 里，而那个文件 import 了 useStore / useSettings / supabase ——
+裸 node 下一个都加载不起来，所以它**一行测试都没有**。
+
+它偏偏最该被钉：`sameLocalObject` 判错一次，自己写的每一条回声都会被当成
+「远端变了」，每次写都白刷一遍 UI（列表重排、输入框失焦、动画重放）；
+`ids` 分支判错一次，收藏数会重复 +1。两种都是**静默**的。
+
+做法和 `transfer.js` 一模一样：只保留对 `data/options.js`（零 import）的依赖，
+把 `state` 和两个副作用（应用设置 / 收藏计数）**从参数传进来**，
+于是它变成纯函数。副作用注入的另一个好处是探针能直接数调用次数。
+
+73 条断言，跑一次几十毫秒，**零依赖、不开浏览器**。
+判别力也自检了（真去改源码验的，不是猜的）：把 `sameLocalObject` 换成
+「比较整个对象」的朴素实现，**红 7 条**；把 `ids` 分支的查重去掉，
+**红 4 条**（其中一条正是「收藏回声 → 不重复计数」）。
+
 
 ## 端到端探针怎么跑
 

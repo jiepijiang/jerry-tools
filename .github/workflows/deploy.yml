@@ -67,7 +67,11 @@ jobs:
         #                    验证脚本是一次性的 `/tmp/jerry-sb/transfer-verify.mjs`
         #                    —— 早就没了，等于长期裸奔。加进来的第一跑就抓到
         #                    「两条缺 id 的书签只进一条」（Set 把 undefined 当 id）。
-        run: npm run check:css-vars && npm run probe:icon-mode && npm run probe:transfer
+        #   probe:realtime-patch
+        #                    实时变更的判决逻辑（realtimePatch.js）：回声抑制、
+        #                    四种 kind 的分支、收藏计数不重复。判错一次的后果是
+        #                    「每次写都白刷一遍 UI」或「收藏数重复 +1」，都是静默的。
+        run: npm run check:css-vars && npm run probe:icon-mode && npm run probe:transfer && npm run probe:realtime-patch
 
       - name: Install dependencies
         run: npm ci
